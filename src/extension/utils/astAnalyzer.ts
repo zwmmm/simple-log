@@ -1,13 +1,13 @@
+import type { Program, Statement, IfStatement } from 'oxc-parser';
 import * as vscode from 'vscode';
-import type { Program, Statement } from '@oxc-project/types';
 
 /**
  * 插入位置分析结果
  */
 export interface InsertPosition {
-  line: number;        // 插入行号
-  character: number;   // 插入列号
-  indent: string;      // 缩进
+  line: number; // 插入行号
+  character: number; // 插入列号
+  indent: string; // 缩进
 }
 
 /**
@@ -23,10 +23,36 @@ interface AnalyzerConfig {
  * oxc-parser 类型定义
  */
 interface OxcParser {
-  parseSync: (filename: string, sourceText: string, options?: any) => {
+  parseSync: (
+    filename: string,
+    sourceText: string,
+    options?: any,
+  ) => {
     program: Program;
     errors: any[];
   };
+}
+
+/**
+ * 类型守卫:检查语句是否具有 span 属性
+ * 所有具体的 Statement 类型都继承了 Span 接口,所以运行时总是有 span
+ */
+function hasSpan(stmt: Statement): stmt is Statement & { span: { start: number; end: number } } {
+  return 'span' in stmt && typeof (stmt as any).span === 'object';
+}
+
+/**
+ * 类型守卫:检查语句是否为 IfStatement
+ */
+function isIfStatement(stmt: Statement): stmt is IfStatement {
+  return stmt.type === 'IfStatement';
+}
+
+/**
+ * 类型守卫:检查语句是否具有 body 属性(如 BlockStatement、ForStatement 等)
+ */
+function hasBodyArray(stmt: Statement): stmt is Statement & { body: Statement[] } {
+  return 'body' in stmt && Array.isArray((stmt as any).body);
 }
 
 /**
@@ -64,11 +90,14 @@ export class AstAnalyzer {
 
         // 直接使用包名让 Node.js 解析，它会自动找到 package.json 中的 exports
         const oxc = await import('oxc-parser');
-        this.parser = oxc as any;
+        this.parser = oxc;
         console.log('[AstAnalyzer.init] oxc-parser loaded successfully');
       } catch (error) {
         console.error('[AstAnalyzer.init] Failed to load oxc-parser:', error);
-        console.error('[AstAnalyzer.init] Error details:', error instanceof Error ? error.message : String(error));
+        console.error(
+          '[AstAnalyzer.init] Error details:',
+          error instanceof Error ? error.message : String(error),
+        );
         this.parser = null;
       }
     })();
@@ -83,10 +112,13 @@ export class AstAnalyzer {
    */
   static async analyzeInsertPosition(
     document: vscode.TextDocument,
-    cursorPosition: vscode.Position
+    cursorPosition: vscode.Position,
   ): Promise<InsertPosition | null> {
     try {
-      console.log('[AstAnalyzer] Starting analysis for cursor at line:', cursorPosition.line);
+      console.log(
+        '[AstAnalyzer] Starting analysis for cursor at line:',
+        cursorPosition.line,
+      );
 
       // 1. 初始化 parser
       await this.init();
@@ -105,34 +137,52 @@ export class AstAnalyzer {
       let actualScope = config.scope;
 
       // 如果用户选择 file 模式但文件太大，强制降级到 local
-      if (config.scope === 'file' && fileLines > config.maxFileLinesForFullParse) {
+      if (
+        config.scope === 'file' &&
+        fileLines > config.maxFileLinesForFullParse
+      ) {
         actualScope = 'local';
-        console.log(`[AstAnalyzer] File too large (${fileLines} lines), downgrading to local scope`);
+        console.log(
+          `[AstAnalyzer] File too large (${fileLines} lines), downgrading to local scope`,
+        );
       }
 
       console.log('[AstAnalyzer] Using scope:', actualScope);
 
       // 4. 根据配置获取代码
-      const context = actualScope === 'local'
-        ? this.extractLocalContext(document, cursorPosition, config.contextLines)
-        : this.extractFileContext(document);
+      const context =
+        actualScope === 'local'
+          ? this.extractLocalContext(
+              document,
+              cursorPosition,
+              config.contextLines,
+            )
+          : this.extractFileContext(document);
 
       if (!context) {
         console.log('[AstAnalyzer] Failed to extract context, returning null');
         return null;
       }
 
-      console.log('[AstAnalyzer] Context extracted: lines', context.startLine, '-', context.endLine);
+      console.log(
+        '[AstAnalyzer] Context extracted: lines',
+        context.startLine,
+        '-',
+        context.endLine,
+      );
 
       // 5. 解析 AST
       const insertLine = this.findInsertLineByAst(
         context.code,
         context.startLine,
         cursorPosition.line,
-        document.languageId
+        document.languageId,
       );
 
-      console.log('[AstAnalyzer] AST analysis result: insertLine =', insertLine);
+      console.log(
+        '[AstAnalyzer] AST analysis result: insertLine =',
+        insertLine,
+      );
 
       if (insertLine !== null) {
         const insertLineText = document.lineAt(insertLine).text;
@@ -141,7 +191,7 @@ export class AstAnalyzer {
         const result = {
           line: insertLine,
           character: 0,
-          indent
+          indent,
         };
         console.log('[AstAnalyzer] Returning result:', result);
         return result;
@@ -164,7 +214,7 @@ export class AstAnalyzer {
     return {
       scope: config.get('astAnalysisScope', 'file'),
       contextLines: config.get('localContextLines', 15),
-      maxFileLinesForFullParse: config.get('maxFileLinesForFullParse', 10000)
+      maxFileLinesForFullParse: config.get('maxFileLinesForFullParse', 10000),
     };
   }
 
@@ -174,7 +224,7 @@ export class AstAnalyzer {
   private static extractLocalContext(
     document: vscode.TextDocument,
     position: vscode.Position,
-    contextLines: number
+    contextLines: number,
   ): { code: string; startLine: number; endLine: number } | null {
     const totalLines = document.lineCount;
     const cursorLine = position.line;
@@ -192,20 +242,22 @@ export class AstAnalyzer {
     return {
       code: lines.join('\n'),
       startLine,
-      endLine
+      endLine,
     };
   }
 
   /**
    * 提取整个文件代码
    */
-  private static extractFileContext(
-    document: vscode.TextDocument
-  ): { code: string; startLine: number; endLine: number } {
+  private static extractFileContext(document: vscode.TextDocument): {
+    code: string;
+    startLine: number;
+    endLine: number;
+  } {
     return {
       code: document.getText(),
       startLine: 0,
-      endLine: document.lineCount - 1
+      endLine: document.lineCount - 1,
     };
   }
 
@@ -216,7 +268,7 @@ export class AstAnalyzer {
     code: string,
     startLine: number,
     cursorLine: number,
-    languageId: string
+    languageId: string,
   ): number | null {
     if (!this.parser) {
       console.log('[findInsertLineByAst] Parser is null');
@@ -232,34 +284,47 @@ export class AstAnalyzer {
       const result = this.parser.parseSync('temp.js', code, {
         lang,
         sourceType: 'module',
-        range: true
+        range: true,
       });
 
-      console.log('[findInsertLineByAst] Parse result - errors:', result.errors?.length || 0);
+      console.log(
+        '[findInsertLineByAst] Parse result - errors:',
+        result.errors?.length || 0,
+      );
 
       // 如果有解析错误，尝试备用方案
       if (result.errors && result.errors.length > 0) {
-        console.log('[findInsertLineByAst] Parse errors detected, using fallback');
+        console.log(
+          '[findInsertLineByAst] Parse errors detected, using fallback',
+        );
         return this.findInsertLineByFallback(code, startLine, cursorLine);
       }
 
       // 将光标位置转换为相对于代码片段的行号
       const relativeCursorLine = cursorLine - startLine;
-      console.log('[findInsertLineByAst] Relative cursor line:', relativeCursorLine);
+      console.log(
+        '[findInsertLineByAst] Relative cursor line:',
+        relativeCursorLine,
+      );
 
       // 遍历 AST，找到包含光标的最小完整语句
       const statement = this.findContainingStatement(
         result.program.body,
-        relativeCursorLine
+        relativeCursorLine,
       );
 
       console.log('[findInsertLineByAst] Found statement:', !!statement);
 
-      if (statement && statement.span) {
+      if (statement && hasSpan(statement)) {
         // 计算语句结束位置的行号
         const statementEndLine = this.calculateLine(code, statement.span.end);
         const finalLine = startLine + statementEndLine + 1;
-        console.log('[findInsertLineByAst] Statement end line:', statementEndLine, 'final line:', finalLine);
+        console.log(
+          '[findInsertLineByAst] Statement end line:',
+          statementEndLine,
+          'final line:',
+          finalLine,
+        );
         return finalLine;
       }
 
@@ -306,10 +371,10 @@ export class AstAnalyzer {
    */
   private static findContainingStatement(
     statements: Statement[],
-    targetLine: number
+    targetLine: number,
   ): Statement | null {
     for (const stmt of statements) {
-      if (!stmt.span) {
+      if (!hasSpan(stmt)) {
         continue;
       }
 
@@ -318,21 +383,29 @@ export class AstAnalyzer {
       // 实际上 oxc 的 span 是字符偏移，需要转换
 
       // 递归检查语句块
-      if ('body' in stmt && Array.isArray((stmt as any).body)) {
-        const nested = this.findContainingStatement((stmt as any).body, targetLine);
+      if (hasBodyArray(stmt)) {
+        const nested = this.findContainingStatement(stmt.body, targetLine);
         if (nested) return nested;
       }
 
       // 检查 if/for/while 等控制语句
-      if (stmt.type === 'IfStatement') {
-        const ifStmt = stmt as any;
-        if (ifStmt.consequent && 'body' in ifStmt.consequent) {
-          const nested = this.findContainingStatement(ifStmt.consequent.body, targetLine);
+      if (isIfStatement(stmt)) {
+        // 检查 consequent 分支
+        if (hasBodyArray(stmt.consequent)) {
+          const nested = this.findContainingStatement(
+            stmt.consequent.body,
+            targetLine,
+          );
           if (nested) return nested;
         }
-        if (ifStmt.alternate) {
-          if ('body' in ifStmt.alternate) {
-            const nested = this.findContainingStatement(ifStmt.alternate.body, targetLine);
+
+        // 检查 alternate 分支
+        if (stmt.alternate) {
+          if (hasBodyArray(stmt.alternate)) {
+            const nested = this.findContainingStatement(
+              stmt.alternate.body,
+              targetLine,
+            );
             if (nested) return nested;
           }
         }
@@ -352,7 +425,7 @@ export class AstAnalyzer {
   private static findInsertLineByFallback(
     code: string,
     startLine: number,
-    cursorLine: number
+    cursorLine: number,
   ): number | null {
     const lines = code.split('\n');
     const relativeCursorLine = cursorLine - startLine;
@@ -378,9 +451,11 @@ export class AstAnalyzer {
       // 检查是否回到平衡状态，且行尾有分号或闭合括号
       if (braceDepth === 0 && parenDepth === 0 && bracketDepth === 0) {
         const trimmed = line.trim();
-        if (trimmed.endsWith(';') ||
-            trimmed.endsWith('}') ||
-            trimmed.endsWith(',')) {
+        if (
+          trimmed.endsWith(';') ||
+          trimmed.endsWith('}') ||
+          trimmed.endsWith(',')
+        ) {
           return startLine + i + 1;
         }
       }
