@@ -32,6 +32,14 @@ export class JavaScriptAdapter implements ILanguageAdapter {
     return /console\.(log|info|debug|warn|error)\([^)]*\);?/g;
   }
 
+  isPluginGeneratedLog(logStatement: string, prefix: string): boolean {
+    // 检查日志语句是否包含配置的前缀
+    // 支持单引号、双引号、反引号格式
+    const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const prefixPattern = new RegExp(`['"\`]\\s*${escapedPrefix}\\s+`);
+    return prefixPattern.test(logStatement);
+  }
+
   /**
    * 使用 AST 分析智能确定插入位置
    * 仅对 JS/TS 文件启用智能模式

@@ -25,4 +25,11 @@ export class PythonAdapter implements ILanguageAdapter {
     // 匹配 print() 语句
     return /print\([^)]*\)/g;
   }
+
+  isPluginGeneratedLog(logStatement: string, prefix: string): boolean {
+    // 检查 Python f-string 格式的日志是否包含配置的前缀
+    const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const prefixPattern = new RegExp(`["']\\s*${escapedPrefix}\\s+`);
+    return prefixPattern.test(logStatement);
+  }
 }

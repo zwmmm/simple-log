@@ -69,6 +69,14 @@ export interface ILanguageAdapter {
   getLogPattern(): RegExp;
 
   /**
+   * 检查日志语句是否由插件生成（通过前缀识别）
+   * @param logStatement 日志语句内容
+   * @param prefix 配置的前缀
+   * @returns 是否为插件生成的日志
+   */
+  isPluginGeneratedLog(logStatement: string, prefix: string): boolean;
+
+  /**
    * 分析并返回最佳插入位置
    * @param document 文档
    * @param cursorLine 光标所在行号

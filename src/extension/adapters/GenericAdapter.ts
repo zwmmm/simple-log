@@ -26,4 +26,11 @@ export class GenericAdapter implements ILanguageAdapter {
     // 匹配包含 LOG: 的注释
     return /\/\/\s*LOG:[^\n]*/g;
   }
+
+  isPluginGeneratedLog(logStatement: string, prefix: string): boolean {
+    // 检查注释格式的日志是否包含配置的前缀
+    const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const prefixPattern = new RegExp(`//\\s*${escapedPrefix}:`);
+    return prefixPattern.test(logStatement);
+  }
 }

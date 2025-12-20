@@ -23,4 +23,11 @@ export class GoAdapter implements ILanguageAdapter {
   getLogPattern(): RegExp {
     return /fmt\.(?:Println|Printf)\([^)]*\)/g;
   }
+
+  isPluginGeneratedLog(logStatement: string, prefix: string): boolean {
+    // 检查 Go 格式的日志是否包含配置的前缀
+    const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const prefixPattern = new RegExp(`"\\s*${escapedPrefix}\\s+`);
+    return prefixPattern.test(logStatement);
+  }
 }
