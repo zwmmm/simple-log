@@ -1,0 +1,45 @@
+# Build files
+.vscode/**
+.vscode-test/**
+src/**
+.gitignore
+.yarnrc
+vsc-extension-quickstart.md
+**/tsconfig.json
+**/*.map
+**/*.ts
+
+# Development
+_bmad/**
+_bmad-output/**
+.cursor/**
+.claude/**
+docs/**
+*.vsix
+
+# Dependencies
+node_modules/**
+
+# Test files
+.vscode-test/**
+**/test/**
+**/*.test.ts
+
+# Config files
+tsconfig.json
+esbuild.config.js
+postcss.config.js
+
+# Misc
+.git/**
+.gitignore
+**/.DS_Store
+*.log
+
+# Keep these
+!out/**
+!README.md
+!README.zh-CN.md
+!LICENSE
+!package.json
+!icon.png
