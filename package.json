@@ -33,6 +33,24 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "simple-log-explorer",
+          "title": "Simple Log",
+          "icon": "$(output)"
+        }
+      ]
+    },
+    "views": {
+      "simple-log-explorer": [
+        {
+          "id": "simpleLogTreeView",
+          "name": "Log Explorer",
+          "contextualTitle": "Simple Log Manager"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "simple-log.insertLog",
@@ -47,8 +65,29 @@
         "title": "Simple-Log: Delete All Logs"
       },
       {
-        "command": "simple-log.showPanel",
-        "title": "Simple-Log: Show Log Manager Panel"
+        "command": "simple-log.refreshTree",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "simple-log.deleteFolder",
+        "title": "Delete All Logs in Folder",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "simple-log.deleteFile",
+        "title": "Delete All Logs in File",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "simple-log.deleteLogItem",
+        "title": "Delete Log",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "simple-log.jumpToLog",
+        "title": "Jump to Source",
+        "icon": "$(go-to-file)"
       }
     ],
     "keybindings": [
@@ -67,13 +106,44 @@
         "command": "simple-log.deleteAll",
         "key": "alt+shift+d",
         "mac": "alt+shift+d"
-      },
-      {
-        "command": "simple-log.showPanel",
-        "key": "ctrl+alt+l",
-        "mac": "cmd+alt+l"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "simple-log.refreshTree",
+          "when": "view == simpleLogTreeView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "simple-log.deleteAll",
+          "when": "view == simpleLogTreeView",
+          "group": "1_actions"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "simple-log.deleteFolder",
+          "when": "view == simpleLogTreeView && viewItem == folder",
+          "group": "inline"
+        },
+        {
+          "command": "simple-log.deleteFile",
+          "when": "view == simpleLogTreeView && viewItem == file",
+          "group": "inline"
+        },
+        {
+          "command": "simple-log.jumpToLog",
+          "when": "view == simpleLogTreeView && viewItem == log",
+          "group": "inline@1"
+        },
+        {
+          "command": "simple-log.deleteLogItem",
+          "when": "view == simpleLogTreeView && viewItem == log",
+          "group": "inline@2"
+        }
+      ]
+    },
     "configuration": {
       "title": "Simple-Log",
       "properties": {
@@ -141,6 +211,32 @@
           "minimum": 100,
           "maximum": 50000,
           "description": "Maximum file lines for full file parsing. Files larger than this will fallback to local analysis even if 'file' scope is selected"
+        },
+        "simple-log.treeView.excludeFolders": {
+          "type": "array",
+          "default": [
+            "node_modules",
+            "dist",
+            "build",
+            "out",
+            ".git",
+            "coverage",
+            ".next",
+            ".nuxt",
+            "vendor"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Folder patterns to exclude from log scanning (supports regex). Default excludes common build and dependency folders."
+        },
+        "simple-log.treeView.includeFolders": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Folder patterns to include in log scanning (supports regex). If specified, only matching folders will be scanned. Leave empty to scan all folders (except excluded ones)."
         }
       }
     }
