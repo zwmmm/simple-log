@@ -38,24 +38,3 @@ export function getLogConfig(): LogConfig {
     includeLineNumber: config.get('includeLineNumber', false)
   };
 }
-
-/**
- * 显示错误消息
- */
-export function showError(message: string): void {
-  vscode.window.showErrorMessage(`Simple-Log: ${message}`);
-}
-
-/**
- * 显示信息消息
- */
-export function showInfo(message: string): void {
-  vscode.window.showInformationMessage(`Simple-Log: ${message}`);
-}
-
-/**
- * 显示警告消息
- */
-export function showWarning(message: string): void {
-  vscode.window.showWarningMessage(`Simple-Log: ${message}`);
-}

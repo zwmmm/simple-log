@@ -1,6 +1,8 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* 显式指定扫描源文件 */
+@source "../**/*.ts";
+@source "../**/*.tsx";
 
 /* VSCode 主题变量适配 */
 body {

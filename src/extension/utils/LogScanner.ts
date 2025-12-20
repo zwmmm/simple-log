@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { LanguageAdapterRegistry } from '../adapters/LanguageAdapterRegistry';
 import { LogEntry, LogStats } from '../types';
+import { getLogConfig } from './helpers';
 
 /**
  * 日志扫描器
@@ -15,6 +16,7 @@ export class LogScanner {
     const adapter = LanguageAdapterRegistry.get(languageId);
     const logPattern = adapter.getLogPattern();
     const commentSyntax = adapter.getCommentSyntax();
+    const config = getLogConfig();
 
     const logs: LogEntry[] = [];
     const text = document.getText();
@@ -25,6 +27,11 @@ export class LogScanner {
 
       if (matches) {
         for (const match of matches) {
+          // 只记录插件生成的日志
+          if (!adapter.isPluginGeneratedLog(match, config.prefix)) {
+            continue;
+          }
+
           const isCommented = line.trim().startsWith(commentSyntax);
           const variable = this.extractVariableFromLog(match);
 

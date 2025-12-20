@@ -4,7 +4,6 @@ import {
   extractVariable,
   getIndentation,
   getLogConfig,
-  showWarning,
 } from '../utils/helpers';
 
 /**
@@ -14,7 +13,6 @@ import {
 export async function insertLogCommand(): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor) {
-    showWarning('No active editor');
     return;
   }
 
@@ -35,8 +33,7 @@ export async function insertLogCommand(): Promise<void> {
 
     // 验证是否为有效变量名（宽松模式，允许属性访问）
     if (!/^[\w.$[\]]+$/.test(variable)) {
-      showWarning(`"${variable}" is not a valid variable name`);
-      return;
+      return; // 无效变量名，静默返回
     }
   } else {
     // 3. 没有选中文本，从当前行提取变量
@@ -49,8 +46,7 @@ export async function insertLogCommand(): Promise<void> {
     cursorLine = position.line;
 
     if (!variable) {
-      showWarning('No variable found on current line');
-      return;
+      return; // 未找到变量，静默返回
     }
   }
 
@@ -119,4 +115,10 @@ export async function insertLogCommand(): Promise<void> {
   // 9. 移动光标到插入的日志行
   const newPosition = new vscode.Position(insertLine, indent.length);
   editor.selection = new vscode.Selection(newPosition, newPosition);
+
+  // 10. 移动到可视区
+  editor.revealRange(
+    new vscode.Range(insertPosition, insertPosition),
+    vscode.TextEditorRevealType.Default,
+  );
 }
