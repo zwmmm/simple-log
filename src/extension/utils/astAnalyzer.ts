@@ -1,4 +1,4 @@
-import type { Program, Statement, IfStatement } from 'oxc-parser';
+import type { IfStatement, Program, Statement } from 'oxc-parser';
 import * as vscode from 'vscode';
 
 /**
@@ -37,7 +37,9 @@ interface OxcParser {
  * 类型守卫:检查语句是否具有 span 属性
  * 所有具体的 Statement 类型都继承了 Span 接口,所以运行时总是有 span
  */
-function hasSpan(stmt: Statement): stmt is Statement & { span: { start: number; end: number } } {
+function hasSpan(
+  stmt: Statement,
+): stmt is Statement & { span: { start: number; end: number } } {
   return 'span' in stmt && typeof (stmt as any).span === 'object';
 }
 
@@ -45,13 +47,16 @@ function hasSpan(stmt: Statement): stmt is Statement & { span: { start: number; 
  * 类型守卫:检查语句是否为 IfStatement
  */
 function isIfStatement(stmt: Statement): stmt is IfStatement {
+  console.log('📝 stmt:', stmt);
   return stmt.type === 'IfStatement';
 }
 
 /**
  * 类型守卫:检查语句是否具有 body 属性(如 BlockStatement、ForStatement 等)
  */
-function hasBodyArray(stmt: Statement): stmt is Statement & { body: Statement[] } {
+function hasBodyArray(
+  stmt: Statement,
+): stmt is Statement & { body: Statement[] } {
   return 'body' in stmt && Array.isArray((stmt as any).body);
 }
 
@@ -316,7 +321,30 @@ export class AstAnalyzer {
       console.log('[findInsertLineByAst] Found statement:', !!statement);
 
       if (statement && hasSpan(statement)) {
-        // 计算语句结束位置的行号
+        // 检查是否为 return 语句
+        const isReturnStatement = statement.type === 'ReturnStatement';
+        console.log(
+          '[findInsertLineByAst] Is return statement:',
+          isReturnStatement,
+        );
+
+        // 计算语句开始位置的行号
+        const statementStartLine = this.calculateLine(
+          code,
+          statement.span.start,
+        );
+
+        // 如果是 return 语句，插入到 return 所在行（上一行）
+        if (isReturnStatement) {
+          const finalLine = startLine + statementStartLine;
+          console.log(
+            '[findInsertLineByAst] Return statement - inserting before at line:',
+            finalLine,
+          );
+          return finalLine;
+        }
+
+        // 非 return 语句，插入到语句结束后的下一行
         const statementEndLine = this.calculateLine(code, statement.span.end);
         const finalLine = startLine + statementEndLine + 1;
         console.log(
@@ -437,6 +465,21 @@ export class AstAnalyzer {
 
     for (let i = relativeCursorLine; i < lines.length; i++) {
       const line = lines[i];
+      const trimmed = line.trim();
+
+      // 检查是否为 return 语句（在当前行或从当前行开始）
+      if (
+        i === relativeCursorLine ||
+        (braceDepth === 0 && parenDepth === 0 && bracketDepth === 0)
+      ) {
+        if (trimmed.startsWith('return')) {
+          console.log(
+            '[findInsertLineByFallback] Found return statement at relative line:',
+            i,
+          );
+          return startLine + i;
+        }
+      }
 
       // 简单的括号计数（不考虑字符串内的括号）
       for (const char of line) {
@@ -450,7 +493,6 @@ export class AstAnalyzer {
 
       // 检查是否回到平衡状态，且行尾有分号或闭合括号
       if (braceDepth === 0 && parenDepth === 0 && bracketDepth === 0) {
-        const trimmed = line.trim();
         if (
           trimmed.endsWith(';') ||
           trimmed.endsWith('}') ||
