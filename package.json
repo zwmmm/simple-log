@@ -94,6 +94,10 @@
         "command": "simple-log.jumpToLog",
         "title": "Jump to Source",
         "icon": "$(go-to-file)"
+      },
+      {
+        "command": "simple-log.showLogs",
+        "title": "Simple-Log: Show Output Logs"
       }
     ],
     "keybindings": [
@@ -262,17 +266,8 @@
     "publish": "vsce publish --no-dependencies"
   },
   "dependencies": {
-    "oxc-parser": "^0.104.0"
-  },
-  "optionalDependencies": {
-    "@oxc-parser/binding-darwin-arm64": "0.104.0",
-    "@oxc-parser/binding-darwin-x64": "0.104.0",
-    "@oxc-parser/binding-linux-arm64-gnu": "0.104.0",
-    "@oxc-parser/binding-linux-arm64-musl": "0.104.0",
-    "@oxc-parser/binding-linux-x64-gnu": "0.104.0",
-    "@oxc-parser/binding-linux-x64-musl": "0.104.0",
-    "@oxc-parser/binding-win32-arm64-msvc": "0.104.0",
-    "@oxc-parser/binding-win32-x64-msvc": "0.104.0"
+    "oxc-parser": "^0.104.0",
+    "@oxc-parser/binding-darwin-arm64": "0.104.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.18",
