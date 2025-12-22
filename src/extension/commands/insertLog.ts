@@ -4,7 +4,9 @@ import {
   extractVariable,
   getIndentation,
   getLogConfig,
+  getSmartFileName,
 } from '../utils/helpers';
+import { Logger } from '../utils/Logger';
 
 /**
  * 插入日志命令
@@ -49,7 +51,7 @@ export async function insertLogCommand(): Promise<void> {
   const logConfig = getLogConfig();
 
   // 5. 添加文件名和行号到配置
-  const fileName = editor.document.fileName.split('/').pop() || '';
+  const fileName = getSmartFileName(editor.document, adapter);
   logConfig.filename = fileName;
   logConfig.lineNumber = cursorLine + 1; // 行号从1开始
 
@@ -60,47 +62,43 @@ export async function insertLogCommand(): Promise<void> {
   let insertLine: number;
   let indent: string;
 
-  console.log('[insertLog] Language:', languageId);
-  console.log(
-    '[insertLog] Adapter has analyzeInsertPosition:',
-    !!adapter.analyzeInsertPosition,
+  Logger.debug(`Language: ${languageId}`);
+  Logger.debug(
+    `Adapter has analyzeInsertPosition: ${!!adapter.analyzeInsertPosition}`,
   );
 
   if (adapter.analyzeInsertPosition) {
     // 适配器支持智能分析
-    console.log(
-      '[insertLog] Calling adapter.analyzeInsertPosition for line:',
-      cursorLine,
+    Logger.debug(
+      `Calling adapter.analyzeInsertPosition for line: ${cursorLine}`,
     );
     const result = await adapter.analyzeInsertPosition(
       editor.document,
       cursorLine,
     );
-    console.log('[insertLog] analyzeInsertPosition result:', result);
+    Logger.debug(`analyzeInsertPosition result: ${JSON.stringify(result)}`);
 
     if (result) {
       // 使用智能分析结果
       insertLine = result.line;
       indent = result.indent;
-      console.log('[insertLog] Using smart mode: insertLine =', insertLine);
+      Logger.debug(`Using smart mode: insertLine = ${insertLine}`);
     } else {
-      // 智能分析失败或返回 null，使用简单模式
+      // 智能分析失败或返回 null,使用简单模式
       insertLine = cursorLine + 1;
       const currentLineText = editor.document.lineAt(cursorLine).text;
       indent = getIndentation(currentLineText);
-      console.log(
-        '[insertLog] Smart analysis returned null, using simple mode: insertLine =',
-        insertLine,
+      Logger.debug(
+        `Smart analysis returned null, using simple mode: insertLine = ${insertLine}`,
       );
     }
   } else {
-    // 适配器不支持智能分析，使用简单模式
+    // 适配器不支持智能分析,使用简单模式
     insertLine = cursorLine + 1;
     const currentLineText = editor.document.lineAt(cursorLine).text;
     indent = getIndentation(currentLineText);
-    console.log(
-      '[insertLog] Adapter does not support smart analysis, using simple mode: insertLine =',
-      insertLine,
+    Logger.debug(
+      `Adapter does not support smart analysis, using simple mode: insertLine = ${insertLine}`,
     );
   }
 

@@ -6,12 +6,15 @@ import { deleteAllLogsCommand } from './commands/deleteAll';
 import { LogTreeDataProvider } from './providers/LogTreeDataProvider';
 import { LogTreeItem } from './providers/LogTreeItem';
 import { LogEntry } from './types';
+import { Logger } from './utils/Logger';
 
 /**
  * 扩展激活时调用
  */
 export function activate(context: vscode.ExtensionContext) {
-  console.log('Simple-Log extension is now active');
+  // 初始化日志系统
+  Logger.initialize(context);
+  Logger.info('Simple-Log extension is now active');
 
   // 初始化语言适配器注册表
   LanguageAdapterRegistry.initialize();
@@ -30,25 +33,25 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(treeView);
 
-  // 监听 TreeView 可见性，在关闭后自动清理缓存（避免内存占用）
+  // 监听 TreeView 可见性,在关闭后自动清理缓存(避免内存占用)
   let clearCacheTimeout: NodeJS.Timeout | undefined;
   treeView.onDidChangeVisibility(e => {
     if (e.visible) {
-      // TreeView 打开，清除之前的清理定时器
+      // TreeView 打开,清除之前的清理定时器
       if (clearCacheTimeout) {
         clearTimeout(clearCacheTimeout);
         clearCacheTimeout = undefined;
-        console.log('[Simple-Log] TreeView opened, cache cleanup cancelled');
+        Logger.debug('TreeView opened, cache cleanup cancelled');
       }
     } else {
-      // TreeView 关闭，5分钟后自动清理缓存
+      // TreeView 关闭,5分钟后自动清理缓存
       clearCacheTimeout = setTimeout(() => {
         if (!treeView.visible) {
           treeDataProvider.clearCache();
-          console.log('[Simple-Log] Cache cleared after 5 minutes of TreeView being closed');
+          Logger.info('Cache cleared after 5 minutes of TreeView being closed');
         }
       }, 5 * 60 * 1000); // 5 分钟
-      console.log('[Simple-Log] TreeView closed, cache will be cleared in 5 minutes');
+      Logger.debug('TreeView closed, cache will be cleared in 5 minutes');
     }
   });
 
@@ -84,6 +87,11 @@ export function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('simple-log.jumpToLog', async (item: LogTreeItem) => {
       await handleJumpToLog(item);
+    }),
+
+    // 显示输出日志
+    vscode.commands.registerCommand('simple-log.showLogs', () => {
+      Logger.show();
     })
   ];
 
@@ -94,20 +102,21 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('simple-log')) {
-        console.log('Simple-Log configuration updated');
+        Logger.info('Configuration updated');
       }
     })
   );
 
-  // 监听文档变化，自动刷新 TreeView
+  // 监听文档变化,自动刷新 TreeView
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument(() => {
       treeDataProvider.refresh();
     })
   );
 
-  console.log(`Simple-Log: Registered ${commands.length} commands`);
-  console.log(`Simple-Log: Supporting ${LanguageAdapterRegistry.getSupportedLanguages().length} languages`);
+  const supportedLanguages = LanguageAdapterRegistry.getSupportedLanguages();
+  Logger.info(`Registered ${commands.length} commands`);
+  Logger.info(`Supporting ${supportedLanguages.length} languages: ${supportedLanguages.join(', ')}`);
 }
 
 /**
@@ -168,7 +177,7 @@ async function handleDeleteNode(
       await document.save();
       deletedCount += fileLogs.length;
     } catch (error) {
-      console.error(`Failed to delete logs in ${fileUri}:`, error);
+      Logger.error(`Failed to delete logs in ${fileUri}`, error);
       vscode.window.showErrorMessage(`Failed to delete logs: ${error}`);
     }
   }
@@ -212,7 +221,7 @@ async function handleDeleteLog(item: LogTreeItem, treeDataProvider: LogTreeDataP
     vscode.window.showInformationMessage('Log deleted');
     treeDataProvider.refresh();
   } catch (error) {
-    console.error('Failed to delete log:', error);
+    Logger.error('Failed to delete log', error);
     vscode.window.showErrorMessage(`Failed to delete log: ${error}`);
   }
 }
@@ -240,7 +249,7 @@ async function handleJumpToLog(item: LogTreeItem) {
       vscode.TextEditorRevealType.InCenter
     );
   } catch (error) {
-    console.error('Failed to jump to log:', error);
+    Logger.error('Failed to jump to log', error);
     vscode.window.showErrorMessage(`Failed to jump to log: ${error}`);
   }
 }
@@ -249,5 +258,5 @@ async function handleJumpToLog(item: LogTreeItem) {
  * 扩展停用时调用
  */
 export function deactivate() {
-  console.log('Simple-Log extension is now deactivated');
+  Logger.info('Simple-Log extension is now deactivated');
 }

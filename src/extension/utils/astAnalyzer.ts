@@ -1,5 +1,6 @@
-import type { IfStatement, Program, Statement } from 'oxc-parser';
+import type { Program, Statement } from 'oxc-parser';
 import * as vscode from 'vscode';
+import { Logger } from './Logger';
 
 /**
  * 插入位置分析结果
@@ -20,89 +21,142 @@ interface AnalyzerConfig {
 }
 
 /**
+ * 解析选项
+ */
+interface ParseOptions {
+  lang: 'js' | 'jsx' | 'ts' | 'tsx';
+  sourceType: 'module' | 'script';
+  range: boolean;
+}
+
+/**
+ * 解析错误
+ */
+interface ParseError {
+  message: string;
+  line?: number;
+  column?: number;
+}
+
+/**
+ * 解析结果
+ */
+interface ParseResult {
+  program: Program;
+  errors: ParseError[];
+}
+
+/**
  * oxc-parser 类型定义
  */
 interface OxcParser {
   parseSync: (
     filename: string,
     sourceText: string,
-    options?: any,
-  ) => {
-    program: Program;
-    errors: any[];
-  };
+    options?: ParseOptions,
+  ) => ParseResult;
 }
 
 /**
- * 类型守卫:检查语句是否具有 span 属性
- * 所有具体的 Statement 类型都继承了 Span 接口,所以运行时总是有 span
+ * 具有有效 span 的语句类型
  */
-function hasSpan(
-  stmt: Statement,
-): stmt is Statement & { span: { start: number; end: number } } {
-  return 'span' in stmt && typeof (stmt as any).span === 'object';
-}
+type StatementWithSpan = Statement & {
+  start: number;
+  end: number;
+};
 
 /**
- * 类型守卫:检查语句是否为 IfStatement
+ * Export 声明类型
  */
-function isIfStatement(stmt: Statement): stmt is IfStatement {
-  console.log('📝 stmt:', stmt);
-  return stmt.type === 'IfStatement';
-}
+type ExportDeclaration = Statement & {
+  type: 'ExportNamedDeclaration' | 'ExportDefaultDeclaration';
+  declaration?: Statement;
+};
 
 /**
- * 类型守卫:检查语句是否具有 body 属性(如 BlockStatement、ForStatement 等)
+ * If 语句类型
  */
-function hasBodyArray(
-  stmt: Statement,
-): stmt is Statement & { body: Statement[] } {
-  return 'body' in stmt && Array.isArray((stmt as any).body);
+type IfStatementNode = Statement & {
+  type: 'IfStatement';
+  consequent: Statement | BlockStatement;
+  alternate?: Statement | BlockStatement;
+};
+
+/**
+ * Switch 语句类型
+ */
+type SwitchStatementNode = Statement & {
+  type: 'SwitchStatement';
+  cases: SwitchCase[];
+};
+
+/**
+ * Switch Case 类型
+ */
+interface SwitchCase {
+  consequent: Statement[];
 }
 
 /**
- * AST 分析器 - 基于 oxc-parser 的智能日志插入位置分析
+ * Try 语句类型
+ */
+type TryStatementNode = Statement & {
+  type: 'TryStatement';
+  block: BlockStatement;
+  handler?: CatchClause;
+  finalizer?: BlockStatement;
+};
+
+/**
+ * Catch 子句类型
+ */
+interface CatchClause {
+  body: BlockStatement;
+}
+
+/**
+ * 块语句类型
+ */
+type BlockStatement = Statement & {
+  body: Statement[];
+};
+
+/**
+ * 循环语句类型
+ */
+type LoopStatement = Statement & {
+  body: Statement | BlockStatement;
+};
+
+/**
+ * AST 分析器 - 完全重构版
  *
- * 优势:
- * - 基于 Rust 的高性能解析器
- * - 支持最新 ECMAScript 语法
- * - 更好的错误恢复能力
- * - 智能文件大小检查和降级
+ * 核心目标:找到最近的安全插入位置,不会造成语法错误
+ *
+ * 策略:
+ * 1. 找到包含光标的最小完整语句
+ * 2. 如果是 return 语句,插入在它之前
+ * 3. 如果是其他语句,插入在它之后
+ * 4. 处理嵌套结构(if/for/while/export 等)
  */
 export class AstAnalyzer {
   private static parser: OxcParser | null = null;
   private static initPromise: Promise<void> | null = null;
 
   /**
-   * 初始化 oxc-parser（异步加载 ESM 模块）
+   * 初始化 oxc-parser(异步加载 ESM 模块)
    */
   private static async init(): Promise<void> {
-    if (this.parser) {
-      console.log('[AstAnalyzer.init] Parser already initialized');
-      return;
-    }
+    if (this.parser) return;
+    if (this.initPromise) return this.initPromise;
 
-    if (this.initPromise) {
-      console.log('[AstAnalyzer.init] Waiting for existing init promise');
-      return this.initPromise;
-    }
-
-    console.log('[AstAnalyzer.init] Starting parser initialization');
     this.initPromise = (async () => {
       try {
-        // 动态导入 ESM 模块
-        console.log('[AstAnalyzer.init] Attempting to import oxc-parser');
-
-        // 直接使用包名让 Node.js 解析，它会自动找到 package.json 中的 exports
         const oxc = await import('oxc-parser');
         this.parser = oxc;
-        console.log('[AstAnalyzer.init] oxc-parser loaded successfully');
+        Logger.info('oxc-parser initialized successfully');
       } catch (error) {
-        console.error('[AstAnalyzer.init] Failed to load oxc-parser:', error);
-        console.error(
-          '[AstAnalyzer.init] Error details:',
-          error instanceof Error ? error.message : String(error),
-        );
+        Logger.error('Failed to initialize oxc-parser', error);
         this.parser = null;
       }
     })();
@@ -112,101 +166,63 @@ export class AstAnalyzer {
 
   /**
    * 分析并返回最佳插入位置
-   * @param document 文档
-   * @param cursorPosition 光标位置
    */
   static async analyzeInsertPosition(
     document: vscode.TextDocument,
     cursorPosition: vscode.Position,
   ): Promise<InsertPosition | null> {
     try {
-      console.log(
-        '[AstAnalyzer] Starting analysis for cursor at line:',
-        cursorPosition.line,
-      );
-
-      // 1. 初始化 parser
       await this.init();
-      console.log('[AstAnalyzer] Parser initialized:', !!this.parser);
       if (!this.parser) {
-        console.log('[AstAnalyzer] Parser not available, returning null');
+        Logger.debug('Parser not available');
         return null;
       }
 
-      // 2. 获取配置
       const config = this.getConfig();
-      console.log('[AstAnalyzer] Config:', config);
-
-      // 3. 检查文件大小并确定实际使用的 scope
       const fileLines = document.lineCount;
-      let actualScope = config.scope;
 
-      // 如果用户选择 file 模式但文件太大，强制降级到 local
-      if (
-        config.scope === 'file' &&
-        fileLines > config.maxFileLinesForFullParse
-      ) {
-        actualScope = 'local';
-        console.log(
-          `[AstAnalyzer] File too large (${fileLines} lines), downgrading to local scope`,
-        );
-      }
+      // 文件太大则使用局部分析
+      const useLocalScope =
+        config.scope === 'local' ||
+        fileLines > config.maxFileLinesForFullParse;
 
-      console.log('[AstAnalyzer] Using scope:', actualScope);
-
-      // 4. 根据配置获取代码
-      const context =
-        actualScope === 'local'
-          ? this.extractLocalContext(
-              document,
-              cursorPosition,
-              config.contextLines,
-            )
-          : this.extractFileContext(document);
-
-      if (!context) {
-        console.log('[AstAnalyzer] Failed to extract context, returning null');
-        return null;
-      }
-
-      console.log(
-        '[AstAnalyzer] Context extracted: lines',
-        context.startLine,
-        '-',
-        context.endLine,
+      Logger.debug(
+        `Analyzing position at line ${cursorPosition.line}, ` +
+        `scope: ${useLocalScope ? 'local' : 'file'}, ` +
+        `total lines: ${fileLines}`
       );
 
-      // 5. 解析 AST
-      const insertLine = this.findInsertLineByAst(
+      // 提取代码上下文
+      const context = useLocalScope
+        ? this.extractLocalContext(document, cursorPosition, config.contextLines)
+        : this.extractFullFile(document);
+
+      // 解析并找到插入位置
+      const insertLine = this.findInsertLine(
         context.code,
         context.startLine,
         cursorPosition.line,
         document.languageId,
       );
 
-      console.log(
-        '[AstAnalyzer] AST analysis result: insertLine =',
-        insertLine,
-      );
-
-      if (insertLine !== null) {
-        const insertLineText = document.lineAt(insertLine).text;
-        const indent = this.getIndentation(insertLineText);
-
-        const result = {
-          line: insertLine,
-          character: 0,
-          indent,
-        };
-        console.log('[AstAnalyzer] Returning result:', result);
-        return result;
+      if (insertLine === null) {
+        Logger.debug('Could not determine insert line');
+        return null;
       }
 
-      console.log('[AstAnalyzer] No valid insert line found, returning null');
-      return null;
+      // 获取插入行的缩进
+      const insertLineText = document.lineAt(insertLine).text;
+      const indent = this.extractIndent(insertLineText);
+
+      Logger.debug(`Insert line determined: ${insertLine}, indent: ${indent.length} chars`);
+
+      return {
+        line: insertLine,
+        character: 0,
+        indent,
+      };
     } catch (error) {
-      // AST 解析失败，返回 null 让调用方使用简单模式
-      console.error('[AstAnalyzer] Error during analysis:', error);
+      Logger.error('Error in analyzeInsertPosition', error);
       return null;
     }
   }
@@ -224,21 +240,19 @@ export class AstAnalyzer {
   }
 
   /**
-   * 提取局部上下文代码
+   * 提取局部上下文
    */
   private static extractLocalContext(
     document: vscode.TextDocument,
     position: vscode.Position,
     contextLines: number,
-  ): { code: string; startLine: number; endLine: number } | null {
+  ): { code: string; startLine: number } {
     const totalLines = document.lineCount;
     const cursorLine = position.line;
 
-    // 计算上下文范围
     const startLine = Math.max(0, cursorLine - contextLines);
     const endLine = Math.min(totalLines - 1, cursorLine + contextLines);
 
-    // 提取代码
     const lines: string[] = [];
     for (let i = startLine; i <= endLine; i++) {
       lines.push(document.lineAt(i).text);
@@ -247,128 +261,444 @@ export class AstAnalyzer {
     return {
       code: lines.join('\n'),
       startLine,
-      endLine,
     };
   }
 
   /**
-   * 提取整个文件代码
+   * 提取整个文件
    */
-  private static extractFileContext(document: vscode.TextDocument): {
+  private static extractFullFile(document: vscode.TextDocument): {
     code: string;
     startLine: number;
-    endLine: number;
   } {
     return {
       code: document.getText(),
       startLine: 0,
-      endLine: document.lineCount - 1,
     };
   }
 
   /**
-   * 通过 oxc AST 分析找到插入行
+   * 核心方法:找到最佳插入行
    */
-  private static findInsertLineByAst(
+  private static findInsertLine(
     code: string,
     startLine: number,
     cursorLine: number,
     languageId: string,
   ): number | null {
-    if (!this.parser) {
-      console.log('[findInsertLineByAst] Parser is null');
-      return null;
-    }
+    if (!this.parser) return null;
 
     try {
-      // 确定语言类型
-      const lang = this.detectLang(languageId);
-      console.log('[findInsertLineByAst] Detected language:', lang);
-
-      // 解析 AST
+      // 解析代码
+      const lang = this.detectLanguage(languageId);
       const result = this.parser.parseSync('temp.js', code, {
         lang,
         sourceType: 'module',
         range: true,
       });
 
-      console.log(
-        '[findInsertLineByAst] Parse result - errors:',
-        result.errors?.length || 0,
-      );
-
-      // 如果有解析错误，尝试备用方案
+      // 如果有解析错误,返回 null
       if (result.errors && result.errors.length > 0) {
-        console.log(
-          '[findInsertLineByAst] Parse errors detected, using fallback',
-        );
-        return this.findInsertLineByFallback(code, startLine, cursorLine);
+        Logger.debug(`Parse errors: ${result.errors.length}`);
+        return null;
       }
 
-      // 将光标位置转换为相对于代码片段的行号
+      // 计算相对行号
       const relativeCursorLine = cursorLine - startLine;
-      console.log(
-        '[findInsertLineByAst] Relative cursor line:',
-        relativeCursorLine,
-      );
 
-      // 遍历 AST，找到包含光标的最小完整语句
+      // 找到包含光标的语句
       const statement = this.findContainingStatement(
         result.program.body,
+        code,
         relativeCursorLine,
       );
 
-      console.log('[findInsertLineByAst] Found statement:', !!statement);
-
-      if (statement && hasSpan(statement)) {
-        // 检查是否为 return 语句
-        const isReturnStatement = statement.type === 'ReturnStatement';
-        console.log(
-          '[findInsertLineByAst] Is return statement:',
-          isReturnStatement,
-        );
-
-        // 计算语句开始位置的行号
-        const statementStartLine = this.calculateLine(
-          code,
-          statement.span.start,
-        );
-
-        // 如果是 return 语句，插入到 return 所在行（上一行）
-        if (isReturnStatement) {
-          const finalLine = startLine + statementStartLine;
-          console.log(
-            '[findInsertLineByAst] Return statement - inserting before at line:',
-            finalLine,
-          );
-          return finalLine;
-        }
-
-        // 非 return 语句，插入到语句结束后的下一行
-        const statementEndLine = this.calculateLine(code, statement.span.end);
-        const finalLine = startLine + statementEndLine + 1;
-        console.log(
-          '[findInsertLineByAst] Statement end line:',
-          statementEndLine,
-          'final line:',
-          finalLine,
-        );
-        return finalLine;
+      if (!statement) {
+        Logger.debug('No containing statement found');
+        return null;
       }
 
-      console.log('[findInsertLineByAst] No valid statement found');
-      return null;
+      Logger.debug(`Found statement type: ${statement.type}`);
+
+      // 计算语句的起始和结束行
+      const stmtStartLine = this.offsetToLine(code, statement.start);
+      const stmtEndLine = this.offsetToLine(code, statement.end);
+
+      Logger.debug(
+        `Statement spans lines ${stmtStartLine}-${stmtEndLine} ` +
+        `(relative), cursor at ${relativeCursorLine}`
+      );
+
+      // 如果是 return 语句,插入在它之前
+      if (statement.type === 'ReturnStatement') {
+        const insertLine = startLine + stmtStartLine;
+        Logger.debug(`Return statement detected, inserting before at line ${insertLine}`);
+        return insertLine;
+      }
+
+      // 其他情况,插入在语句结束后
+      const insertLine = startLine + stmtEndLine + 1;
+      Logger.debug(`Inserting after statement at line ${insertLine}`);
+      return insertLine;
+
     } catch (error) {
-      // 语法错误或其他问题，尝试备用方案
-      console.error('[findInsertLineByAst] Exception:', error);
-      return this.findInsertLineByFallback(code, startLine, cursorLine);
+      Logger.error('Error in findInsertLine', error);
+      return null;
     }
+  }
+
+  /**
+   * 找到包含目标行的最小语句
+   *
+   * 策略:
+   * 1. 深度优先遍历 AST
+   * 2. 找到所有包含目标行的语句
+   * 3. 返回跨度最小的那个(最精确的匹配)
+   */
+  private static findContainingStatement(
+    statements: Statement[],
+    code: string,
+    targetLine: number,
+  ): StatementWithSpan | null {
+    let bestMatch: StatementWithSpan | null = null;
+    let bestMatchSize = Infinity;
+
+    Logger.debug(`findContainingStatement: checking ${statements.length} statements for target line ${targetLine}`);
+
+    for (const stmt of statements) {
+      if (!this.hasValidSpan(stmt)) {
+        Logger.debug(`Statement ${(stmt as any).type || 'unknown'} has no valid span, skipping`);
+        continue;
+      }
+
+      const stmtStartLine = this.offsetToLine(code, stmt.start);
+      const stmtEndLine = this.offsetToLine(code, stmt.end);
+
+      Logger.debug(
+        `Checking ${stmt.type}: lines ${stmtStartLine}-${stmtEndLine}, ` +
+        `target: ${targetLine}, contains: ${targetLine >= stmtStartLine && targetLine <= stmtEndLine}`
+      );
+
+      // 检查目标行是否在语句范围内
+      if (targetLine < stmtStartLine || targetLine > stmtEndLine) {
+        continue;
+      }
+
+      const stmtSize = stmtEndLine - stmtStartLine;
+      Logger.debug(`Statement ${stmt.type} contains target line, size: ${stmtSize}`);
+
+      // 处理 export 包装语句,深入到内部声明
+      const unwrapped = this.unwrapExportDeclaration(stmt);
+      if (unwrapped && unwrapped !== stmt) {
+        Logger.debug(`Unwrapping export declaration to ${unwrapped.type}`);
+        const nested = this.findContainingStatement([unwrapped], code, targetLine);
+        if (nested) {
+          const nestedSize =
+            this.offsetToLine(code, nested.end) -
+            this.offsetToLine(code, nested.start);
+          if (nestedSize < bestMatchSize) {
+            bestMatch = nested;
+            bestMatchSize = nestedSize;
+            Logger.debug(`Found better match in unwrapped: ${nested.type}, size: ${nestedSize}`);
+          }
+          continue;
+        }
+      }
+
+      // 检查是否有更好的匹配
+      if (stmtSize < bestMatchSize) {
+        bestMatch = stmt as StatementWithSpan;
+        bestMatchSize = stmtSize;
+        Logger.debug(`New best match: ${stmt.type}, size: ${stmtSize}`);
+      }
+
+      // 递归检查嵌套的语句块
+      const nestedStatements = this.getNestedStatements(stmt);
+      Logger.debug(`Extracting nested statements from ${stmt.type}: found ${nestedStatements.length}`);
+
+      if (nestedStatements.length > 0) {
+        const nested = this.findContainingStatement(
+          nestedStatements,
+          code,
+          targetLine,
+        );
+        if (nested) {
+          const nestedSize =
+            this.offsetToLine(code, nested.end) -
+            this.offsetToLine(code, nested.start);
+          if (nestedSize < bestMatchSize) {
+            bestMatch = nested;
+            bestMatchSize = nestedSize;
+            Logger.debug(`Found better match in nested: ${nested.type}, size: ${nestedSize}`);
+          }
+        }
+      }
+    }
+
+    Logger.debug(`Best match result: ${bestMatch?.type || 'null'}`);
+    return bestMatch;
+  }
+
+  /**
+   * 检查语句是否具有有效的 span
+   */
+  private static hasValidSpan(stmt: Statement): stmt is StatementWithSpan {
+    return (
+      'type' in stmt &&
+      'start' in stmt &&
+      'end' in stmt &&
+      typeof stmt.start === 'number' &&
+      typeof stmt.end === 'number'
+    );
+  }
+
+  /**
+   * 类型守卫:检查是否为 Export 声明
+   */
+  private static isExportDeclaration(stmt: Statement): stmt is ExportDeclaration {
+    return stmt.type === 'ExportNamedDeclaration' || stmt.type === 'ExportDefaultDeclaration';
+  }
+
+  /**
+   * 展开 export 声明,获取内部的实际声明
+   */
+  private static unwrapExportDeclaration(stmt: Statement): Statement | null {
+    if (this.isExportDeclaration(stmt)) {
+      const declaration = stmt.declaration;
+      if (declaration && this.hasValidSpan(declaration)) {
+        return declaration;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 类型守卫:检查是否为 IfStatement
+   */
+  private static isIfStatement(stmt: Statement): stmt is IfStatementNode {
+    return stmt.type === 'IfStatement';
+  }
+
+  /**
+   * 类型守卫:检查是否为 SwitchStatement
+   */
+  private static isSwitchStatement(stmt: Statement): stmt is SwitchStatementNode {
+    return stmt.type === 'SwitchStatement';
+  }
+
+  /**
+   * 类型守卫:检查是否为 TryStatement
+   */
+  private static isTryStatement(stmt: Statement): stmt is TryStatementNode {
+    return stmt.type === 'TryStatement';
+  }
+
+  /**
+   * 类型守卫:检查是否为循环语句
+   */
+  private static isLoopStatement(stmt: Statement): stmt is LoopStatement {
+    return (
+      stmt.type === 'ForStatement' ||
+      stmt.type === 'ForInStatement' ||
+      stmt.type === 'ForOfStatement' ||
+      stmt.type === 'WhileStatement' ||
+      stmt.type === 'DoWhileStatement'
+    );
+  }
+
+  /**
+   * 类型守卫:检查是否有 body 属性且为数组
+   */
+  private static hasBodyArray(stmt: Statement): stmt is BlockStatement {
+    return 'body' in stmt && Array.isArray((stmt as BlockStatement).body);
+  }
+
+  /**
+   * 获取语句中的嵌套语句
+   * 需要深入到所有可能包含语句的地方,包括:
+   * - BlockStatement 的 body
+   * - FunctionExpression/ArrowFunctionExpression 的 body
+   * - CallExpression 的参数
+   * - IfStatement 的分支
+   * - 循环语句的 body
+   * 等等
+   */
+  private static getNestedStatements(stmt: Statement): Statement[] {
+    const nested: Statement[] = [] as Statement[];
+
+    // BlockStatement, FunctionDeclaration 等有 body 数组
+    if (this.hasBodyArray(stmt)) {
+      nested.push(...stmt.body);
+      return nested;
+    }
+
+    // 如果有 body 但不是数组,可能是包含 BlockStatement 的对象
+    if ('body' in stmt) {
+      const body = (stmt as { body: unknown }).body;
+      if (body && typeof body === 'object' && 'body' in body) {
+        const innerBody = (body as { body: unknown }).body;
+        if (Array.isArray(innerBody)) {
+          nested.push(...innerBody);
+        }
+      }
+    }
+
+    // VariableDeclaration: 需要检查初始化表达式
+    if (stmt.type === 'VariableDeclaration') {
+      const varDecl = stmt as Statement & {
+        declarations: Array<{
+          init?: unknown;
+        }>;
+      };
+      for (const declarator of varDecl.declarations) {
+        if (declarator.init) {
+          // 递归提取表达式中的语句
+          nested.push(...this.extractStatementsFromExpression(declarator.init));
+        }
+      }
+    }
+
+    // ExpressionStatement: 检查表达式中的语句
+    if (stmt.type === 'ExpressionStatement') {
+      const exprStmt = stmt as Statement & { expression: unknown };
+      nested.push(...this.extractStatementsFromExpression(exprStmt.expression));
+    }
+
+    // IfStatement 有 consequent 和 alternate
+    if (this.isIfStatement(stmt)) {
+      if (stmt.consequent) {
+        if (this.hasBodyArray(stmt.consequent)) {
+          nested.push(...stmt.consequent.body);
+        } else {
+          nested.push(stmt.consequent);
+        }
+      }
+      if (stmt.alternate) {
+        if (this.hasBodyArray(stmt.alternate)) {
+          nested.push(...stmt.alternate.body);
+        } else {
+          nested.push(stmt.alternate);
+        }
+      }
+    }
+
+    // SwitchStatement 有 cases
+    if (this.isSwitchStatement(stmt)) {
+      for (const caseClause of stmt.cases) {
+        if (Array.isArray(caseClause.consequent)) {
+          nested.push(...caseClause.consequent);
+        }
+      }
+    }
+
+    // TryStatement 有 block, handler, finalizer
+    if (this.isTryStatement(stmt)) {
+      if (stmt.block && this.hasBodyArray(stmt.block)) {
+        nested.push(...stmt.block.body);
+      }
+      if (stmt.handler?.body && this.hasBodyArray(stmt.handler.body)) {
+        nested.push(...stmt.handler.body.body);
+      }
+      if (stmt.finalizer && this.hasBodyArray(stmt.finalizer)) {
+        nested.push(...stmt.finalizer.body);
+      }
+    }
+
+    // ForStatement, WhileStatement, DoWhileStatement 等循环语句
+    if (this.isLoopStatement(stmt)) {
+      if (stmt.body) {
+        if (this.hasBodyArray(stmt.body)) {
+          nested.push(...stmt.body.body);
+        } else {
+          nested.push(stmt.body);
+        }
+      }
+    }
+
+    return nested;
+  }
+
+  /**
+   * 从表达式中提取语句
+   * 处理 CallExpression, ArrowFunctionExpression, FunctionExpression 等
+   */
+  private static extractStatementsFromExpression(expr: unknown): Statement[] {
+    const statements: Statement[] = [];
+
+    if (!expr || typeof expr !== 'object') {
+      return statements;
+    }
+
+    const exprObj = expr as { type?: string; [key: string]: unknown };
+
+    // ArrowFunctionExpression 或 FunctionExpression
+    if (
+      exprObj.type === 'ArrowFunctionExpression' ||
+      exprObj.type === 'FunctionExpression'
+    ) {
+      const body = exprObj.body;
+
+      // 如果 body 是 BlockStatement
+      if (body && typeof body === 'object' && 'body' in body) {
+        const bodyStatements = (body as { body: unknown }).body;
+        if (Array.isArray(bodyStatements)) {
+          statements.push(...bodyStatements);
+        }
+      }
+    }
+
+    // CallExpression: 检查参数
+    if (exprObj.type === 'CallExpression') {
+      const args = exprObj.arguments;
+      if (Array.isArray(args)) {
+        for (const arg of args) {
+          statements.push(...this.extractStatementsFromExpression(arg));
+        }
+      }
+    }
+
+    // ArrayExpression: 检查元素
+    if (exprObj.type === 'ArrayExpression') {
+      const elements = exprObj.elements;
+      if (Array.isArray(elements)) {
+        for (const element of elements) {
+          statements.push(...this.extractStatementsFromExpression(element));
+        }
+      }
+    }
+
+    // ObjectExpression: 检查属性值
+    if (exprObj.type === 'ObjectExpression') {
+      const properties = exprObj.properties;
+      if (Array.isArray(properties)) {
+        for (const prop of properties) {
+          if (prop && typeof prop === 'object' && 'value' in prop) {
+            statements.push(...this.extractStatementsFromExpression(prop.value));
+          }
+        }
+      }
+    }
+
+    return statements;
+  }
+
+  /**
+   * 将字符偏移转换为行号
+   */
+  private static offsetToLine(code: string, offset: number): number {
+    let line = 0;
+    for (let i = 0; i < offset && i < code.length; i++) {
+      if (code[i] === '\n') {
+        line++;
+      }
+    }
+    return line;
   }
 
   /**
    * 检测语言类型
    */
-  private static detectLang(languageId: string): 'js' | 'jsx' | 'ts' | 'tsx' {
+  private static detectLanguage(languageId: string): 'js' | 'jsx' | 'ts' | 'tsx' {
     switch (languageId) {
       case 'typescript':
         return 'ts';
@@ -382,135 +712,9 @@ export class AstAnalyzer {
   }
 
   /**
-   * 计算字符偏移对应的行号
+   * 提取行缩进
    */
-  private static calculateLine(code: string, offset: number): number {
-    let line = 0;
-    for (let i = 0; i < offset && i < code.length; i++) {
-      if (code[i] === '\n') {
-        line++;
-      }
-    }
-    return line;
-  }
-
-  /**
-   * 找到包含指定行的语句节点
-   */
-  private static findContainingStatement(
-    statements: Statement[],
-    targetLine: number,
-  ): Statement | null {
-    for (const stmt of statements) {
-      if (!hasSpan(stmt)) {
-        continue;
-      }
-
-      // 需要将 span.start/end 转换为行号来比较
-      // 这里简化处理：假设 span 中有位置信息
-      // 实际上 oxc 的 span 是字符偏移，需要转换
-
-      // 递归检查语句块
-      if (hasBodyArray(stmt)) {
-        const nested = this.findContainingStatement(stmt.body, targetLine);
-        if (nested) return nested;
-      }
-
-      // 检查 if/for/while 等控制语句
-      if (isIfStatement(stmt)) {
-        // 检查 consequent 分支
-        if (hasBodyArray(stmt.consequent)) {
-          const nested = this.findContainingStatement(
-            stmt.consequent.body,
-            targetLine,
-          );
-          if (nested) return nested;
-        }
-
-        // 检查 alternate 分支
-        if (stmt.alternate) {
-          if (hasBodyArray(stmt.alternate)) {
-            const nested = this.findContainingStatement(
-              stmt.alternate.body,
-              targetLine,
-            );
-            if (nested) return nested;
-          }
-        }
-      }
-
-      // 对于当前语句，如果包含目标行，返回它
-      // 这里需要更精确的行号计算逻辑
-    }
-
-    // 简化策略：返回最后一个语句
-    return statements.length > 0 ? statements[statements.length - 1] : null;
-  }
-
-  /**
-   * 备用方案：基于括号匹配找到合适的插入位置
-   */
-  private static findInsertLineByFallback(
-    code: string,
-    startLine: number,
-    cursorLine: number,
-  ): number | null {
-    const lines = code.split('\n');
-    const relativeCursorLine = cursorLine - startLine;
-
-    // 从光标位置向下查找，找到第一个完整的语句结束
-    let braceDepth = 0;
-    let parenDepth = 0;
-    let bracketDepth = 0;
-
-    for (let i = relativeCursorLine; i < lines.length; i++) {
-      const line = lines[i];
-      const trimmed = line.trim();
-
-      // 检查是否为 return 语句（在当前行或从当前行开始）
-      if (
-        i === relativeCursorLine ||
-        (braceDepth === 0 && parenDepth === 0 && bracketDepth === 0)
-      ) {
-        if (trimmed.startsWith('return')) {
-          console.log(
-            '[findInsertLineByFallback] Found return statement at relative line:',
-            i,
-          );
-          return startLine + i;
-        }
-      }
-
-      // 简单的括号计数（不考虑字符串内的括号）
-      for (const char of line) {
-        if (char === '{') braceDepth++;
-        if (char === '}') braceDepth--;
-        if (char === '(') parenDepth++;
-        if (char === ')') parenDepth--;
-        if (char === '[') bracketDepth++;
-        if (char === ']') bracketDepth--;
-      }
-
-      // 检查是否回到平衡状态，且行尾有分号或闭合括号
-      if (braceDepth === 0 && parenDepth === 0 && bracketDepth === 0) {
-        if (
-          trimmed.endsWith(';') ||
-          trimmed.endsWith('}') ||
-          trimmed.endsWith(',')
-        ) {
-          return startLine + i + 1;
-        }
-      }
-    }
-
-    // 如果找不到，返回光标下一行（回退到原始逻辑）
-    return cursorLine + 1;
-  }
-
-  /**
-   * 获取行缩进
-   */
-  private static getIndentation(line: string): string {
+  private static extractIndent(line: string): string {
     const match = line.match(/^(\s*)/);
     return match ? match[1] : '';
   }

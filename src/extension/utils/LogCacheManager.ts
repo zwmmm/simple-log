@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { LogEntry } from '../types';
+import { Logger } from './Logger';
 
 /**
  * 文件缓存项
@@ -85,7 +86,7 @@ export class LogCacheManager {
       const stat = await vscode.workspace.fs.stat(fileUri);
       return stat.mtime;
     } catch (error) {
-      console.error(`Failed to get mtime for ${fileUri.fsPath}:`, error);
+      Logger.error(`Failed to get mtime for ${fileUri.fsPath}`, error);
       return 0;
     }
   }
