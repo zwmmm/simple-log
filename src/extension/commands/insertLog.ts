@@ -25,18 +25,13 @@ export async function insertLogCommand(): Promise<void> {
   let variable: string | null = null;
   let cursorLine: number;
 
-  // 如果有选中文本，直接使用选中的文本作为变量名
+  // 如果有选中文本,直接使用选中的文本
   if (!selection.isEmpty) {
     const selectedText = editor.document.getText(selection);
     variable = selectedText.trim();
     cursorLine = selection.end.line;
-
-    // 验证是否为有效变量名（宽松模式，允许属性访问）
-    if (!/^[\w.$[\]]+$/.test(variable)) {
-      return; // 无效变量名，静默返回
-    }
   } else {
-    // 3. 没有选中文本，从当前行提取变量
+    // 3. 没有选中文本,从当前行提取变量
     const position = editor.selection.active;
     const currentLine = editor.document.lineAt(position.line);
     const lineText = currentLine.text;
@@ -46,17 +41,22 @@ export async function insertLogCommand(): Promise<void> {
     cursorLine = position.line;
 
     if (!variable) {
-      return; // 未找到变量，静默返回
+      return; // 未找到变量,静默返回
     }
   }
 
   // 4. 获取用户配置
   const logConfig = getLogConfig();
 
-  // 5. 格式化日志语句
+  // 5. 添加文件名和行号到配置
+  const fileName = editor.document.fileName.split('/').pop() || '';
+  logConfig.filename = fileName;
+  logConfig.lineNumber = cursorLine + 1; // 行号从1开始
+
+  // 6. 格式化日志语句
   const logStatement = adapter.formatLog(variable, logConfig);
 
-  // 6. 委托给适配器分析插入位置
+  // 7. 委托给适配器分析插入位置
   let insertLine: number;
   let indent: string;
 
@@ -104,19 +104,19 @@ export async function insertLogCommand(): Promise<void> {
     );
   }
 
-  // 7. 计算插入位置
+  // 8. 计算插入位置
   const insertPosition = new vscode.Position(insertLine, 0);
 
-  // 8. 插入日志
+  // 9. 插入日志
   await editor.edit((editBuilder) => {
     editBuilder.insert(insertPosition, `${indent}${logStatement}\n`);
   });
 
-  // 9. 移动光标到插入的日志行
+  // 10. 移动光标到插入的日志行
   const newPosition = new vscode.Position(insertLine, indent.length);
   editor.selection = new vscode.Selection(newPosition, newPosition);
 
-  // 10. 移动到可视区
+  // 11. 移动到可视区
   editor.revealRange(
     new vscode.Range(insertPosition, insertPosition),
     vscode.TextEditorRevealType.Default,
