@@ -38,3 +38,6 @@ coverage/
 *.tmp
 .cache/
 *.vsix
+
+# MCP tool working directories
+.spec-workflow/
