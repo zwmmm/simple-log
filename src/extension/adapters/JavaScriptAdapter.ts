@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ILanguageAdapter, LogConfig, InsertPosition } from '../types';
 import { AstAnalyzer } from '../utils/astAnalyzer';
+import { Logger } from '../utils/Logger';
 
 /**
  * JavaScript/TypeScript 适配器
@@ -58,21 +59,21 @@ export class JavaScriptAdapter implements ILanguageAdapter {
     const config = vscode.workspace.getConfiguration('simple-log');
     const insertMode = config.get<string>('insertMode', 'smart');
 
-    console.log('[JavaScriptAdapter] insertMode from config:', insertMode);
+    Logger.debug(`insertMode from config: ${insertMode}`);
 
-    // 如果用户选择简单模式，返回 null（使用默认行为）
+    // 如果用户选择简单模式,返回 null(使用默认行为)
     if (insertMode === 'simple') {
-      console.log('[JavaScriptAdapter] User selected simple mode, returning null');
+      Logger.debug('User selected simple mode, returning null');
       return null;
     }
 
-    console.log('[JavaScriptAdapter] Calling AstAnalyzer.analyzeInsertPosition');
+    Logger.debug('Calling AstAnalyzer.analyzeInsertPosition');
     // 使用 AST 分析器
     const result = await AstAnalyzer.analyzeInsertPosition(
       document,
       new vscode.Position(cursorLine, 0)
     );
-    console.log('[JavaScriptAdapter] AstAnalyzer returned:', result);
+    Logger.debug(`AstAnalyzer returned: ${JSON.stringify(result)}`);
     return result;
   }
 

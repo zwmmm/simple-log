@@ -40,4 +40,12 @@ export class GenericAdapter implements ILanguageAdapter {
     const prefixPattern = new RegExp(`//\\s*${escapedPrefix}:`);
     return prefixPattern.test(logStatement);
   }
+
+  /**
+   * 获取通用入口文件名
+   * 返回空数组,表示不识别任何特定的入口文件
+   */
+  getEntryFileNames(): string[] {
+    return [];
+  }
 }
