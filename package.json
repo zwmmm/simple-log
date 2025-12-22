@@ -1,9 +1,10 @@
 {
   "name": "simple-log",
-  "displayName": "Simple-Log",
+  "displayName": "Simple Log",
   "description": "Lightweight, multi-language log insertion tool for VSCode",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "publisher": "Sanyi",
+  "icon": "images/logo.png",
   "author": {
     "name": "Wayne"
   },
@@ -70,6 +71,11 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "simple-log.clearCacheAndRefresh",
+        "title": "Clear Cache and Refresh",
+        "icon": "$(clear-all)"
+      },
+      {
         "command": "simple-log.deleteFolder",
         "title": "Delete All Logs in Folder",
         "icon": "$(trash)"
@@ -114,6 +120,11 @@
           "command": "simple-log.refreshTree",
           "when": "view == simpleLogTreeView",
           "group": "navigation@1"
+        },
+        {
+          "command": "simple-log.clearCacheAndRefresh",
+          "when": "view == simpleLogTreeView",
+          "group": "navigation@2"
         },
         {
           "command": "simple-log.deleteAll",
@@ -247,7 +258,8 @@
     "watch": "node esbuild.config.js --watch",
     "lint": "oxlint src",
     "format": "oxlint --fix src",
-    "test": "node --import tsx --test src/test/**/*.test.ts"
+    "test": "node --import tsx --test src/test/**/*.test.ts",
+    "publish": "vsce publish --no-dependencies"
   },
   "dependencies": {
     "oxc-parser": "^0.104.0"
