@@ -12,10 +12,16 @@ export class JavaScriptAdapter implements ILanguageAdapter {
     const prefix = config.prefix || '📝';
     const quote = config.useBackticks ? '`' : "'";
 
-    if (config.useBackticks) {
-      return `console.log(\`${prefix} ${variable}:\`, ${variable});`;
+    // 构建上下文信息 (文件名:行号)
+    let context = '';
+    if (config.filename && config.lineNumber) {
+      context = `[${config.filename}:${config.lineNumber}] `;
     }
-    return `console.log(${quote}${prefix} ${variable}:${quote}, ${variable});`;
+
+    if (config.useBackticks) {
+      return `console.log(\`${prefix} ${context}${variable}:\`, ${variable});`;
+    }
+    return `console.log(${quote}${prefix} ${context}${variable}:${quote}, ${variable});`;
   }
 
   getCommentSyntax(): string {
@@ -68,6 +74,13 @@ export class JavaScriptAdapter implements ILanguageAdapter {
     );
     console.log('[JavaScriptAdapter] AstAnalyzer returned:', result);
     return result;
+  }
+
+  /**
+   * 获取 JavaScript/TypeScript 的通用入口文件名
+   */
+  getEntryFileNames(): string[] {
+    return ['index'];
   }
 }
 

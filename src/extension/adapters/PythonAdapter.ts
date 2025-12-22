@@ -8,8 +8,15 @@ export class PythonAdapter implements ILanguageAdapter {
 
   formatLog(variable: string, config: LogConfig): string {
     const prefix = config.prefix || '📝';
+
+    // 构建上下文信息 (文件名:行号)
+    let context = '';
+    if (config.filename && config.lineNumber) {
+      context = `[${config.filename}:${config.lineNumber}] `;
+    }
+
     // Python 使用 f-string 格式
-    return `print(f"${prefix} ${variable}: {${variable}}")`;
+    return `print(f"${prefix} ${context}${variable}: {${variable}}")`;
   }
 
   getCommentSyntax(): string {
@@ -31,5 +38,12 @@ export class PythonAdapter implements ILanguageAdapter {
     const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const prefixPattern = new RegExp(`["']\\s*${escapedPrefix}\\s+`);
     return prefixPattern.test(logStatement);
+  }
+
+  /**
+   * 获取 Python 的通用入口文件名
+   */
+  getEntryFileNames(): string[] {
+    return ['__init__', '__main__'];
   }
 }

@@ -9,8 +9,15 @@ export class GenericAdapter implements ILanguageAdapter {
 
   formatLog(variable: string, config: LogConfig): string {
     const prefix = config.prefix || 'LOG';
+
+    // 构建上下文信息 (文件名:行号)
+    let context = '';
+    if (config.filename && config.lineNumber) {
+      context = `[${config.filename}:${config.lineNumber}] `;
+    }
+
     // 使用注释格式作为通用日志
-    return `// ${prefix}: ${variable} = ${variable}`;
+    return `// ${prefix}: ${context}${variable} = ${variable}`;
   }
 
   getCommentSyntax(): string {
