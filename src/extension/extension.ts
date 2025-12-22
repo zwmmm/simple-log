@@ -30,6 +30,28 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(treeView);
 
+  // 监听 TreeView 可见性，在关闭后自动清理缓存（避免内存占用）
+  let clearCacheTimeout: NodeJS.Timeout | undefined;
+  treeView.onDidChangeVisibility(e => {
+    if (e.visible) {
+      // TreeView 打开，清除之前的清理定时器
+      if (clearCacheTimeout) {
+        clearTimeout(clearCacheTimeout);
+        clearCacheTimeout = undefined;
+        console.log('[Simple-Log] TreeView opened, cache cleanup cancelled');
+      }
+    } else {
+      // TreeView 关闭，5分钟后自动清理缓存
+      clearCacheTimeout = setTimeout(() => {
+        if (!treeView.visible) {
+          treeDataProvider.clearCache();
+          console.log('[Simple-Log] Cache cleared after 5 minutes of TreeView being closed');
+        }
+      }, 5 * 60 * 1000); // 5 分钟
+      console.log('[Simple-Log] TreeView closed, cache will be cleared in 5 minutes');
+    }
+  });
+
   // 注册命令
   const commands = [
     // 原有命令
@@ -41,6 +63,11 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('simple-log.refreshTree', () => {
       treeDataProvider.refresh();
       vscode.window.showInformationMessage('Log tree refreshed');
+    }),
+
+    vscode.commands.registerCommand('simple-log.clearCacheAndRefresh', () => {
+      treeDataProvider.clearCacheAndRefresh();
+      vscode.window.showInformationMessage('Cache cleared and refreshed');
     }),
 
     vscode.commands.registerCommand('simple-log.deleteFolder', async (item: LogTreeItem) => {
