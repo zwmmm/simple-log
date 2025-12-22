@@ -23,6 +23,12 @@ export interface LogConfig {
 
   /** 是否包含行号 */
   includeLineNumber?: boolean;
+
+  /** 当前文件名 */
+  filename?: string;
+
+  /** 当前行号 */
+  lineNumber?: number;
 }
 
 /**
@@ -86,6 +92,13 @@ export interface ILanguageAdapter {
     document: vscode.TextDocument,
     cursorLine: number
   ): Promise<InsertPosition | null>;
+
+  /**
+   * 获取该语言的通用入口文件名(不含扩展名)
+   * 用于在树视图中区分同名入口文件
+   * @returns 入口文件名数组,例如 ['index', 'main']
+   */
+  getEntryFileNames?(): string[];
 }
 
 /**
