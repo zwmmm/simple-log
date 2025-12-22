@@ -3,6 +3,8 @@ import * as path from 'path';
 import { LogScanner } from '../utils/LogScanner';
 import { LogTreeItem, LogTreeNodeData } from './LogTreeItem';
 import { LogEntry } from '../types';
+import { LogCacheManager } from '../utils/LogCacheManager';
+import { LanguageAdapterRegistry } from '../adapters/LanguageAdapterRegistry';
 
 /**
  * TreeView 数据提供器
@@ -11,6 +13,9 @@ export class LogTreeDataProvider implements vscode.TreeDataProvider<LogTreeItem>
   private _onDidChangeTreeData = new vscode.EventEmitter<LogTreeItem | undefined | null>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
+  /** 缓存管理器 */
+  private cacheManager = new LogCacheManager();
+
   constructor(private workspaceRoot: string) {}
 
   /**
@@ -18,6 +23,24 @@ export class LogTreeDataProvider implements vscode.TreeDataProvider<LogTreeItem>
    */
   refresh(): void {
     this._onDidChangeTreeData.fire(undefined);
+  }
+
+  /**
+   * 清空缓存（不刷新视图）
+   * 用于自动内存管理
+   */
+  clearCache(): void {
+    this.cacheManager.clear();
+    console.log('[LogTreeDataProvider] Cache cleared');
+  }
+
+  /**
+   * 清空缓存并刷新
+   * 用于强制重新扫描所有文件
+   */
+  clearCacheAndRefresh(): void {
+    this.clearCache();
+    this.refresh();
   }
 
   /**
@@ -56,7 +79,7 @@ export class LogTreeDataProvider implements vscode.TreeDataProvider<LogTreeItem>
   }
 
   /**
-   * 扫描工作区中的所有日志
+   * 扫描工作区中的所有日志(带缓存优化 + 异步分批扫描)
    */
   private async scanWorkspace(): Promise<LogEntry[]> {
     const allLogs: LogEntry[] = [];
@@ -106,45 +129,95 @@ export class LogTreeDataProvider implements vscode.TreeDataProvider<LogTreeItem>
 
       console.log(`[LogTreeDataProvider] Found ${files.length} files to scan`);
 
+      // 过滤文件列表
+      const filteredFiles: vscode.Uri[] = [];
       for (const fileUri of files) {
-        try {
-          // 获取相对路径
-          const relativePath = path.relative(this.workspaceRoot, fileUri.fsPath);
+        const relativePath = path.relative(this.workspaceRoot, fileUri.fsPath);
 
-          // 检查 exclude 规则
-          const isExcluded = excludeRegexes.some(regex => regex.test(relativePath));
-          if (isExcluded) {
+        // 检查 exclude 规则
+        const isExcluded = excludeRegexes.some(regex => regex.test(relativePath));
+        if (isExcluded) {
+          continue;
+        }
+
+        // 检查 include 规则（如果指定了）
+        if (includeRegexes) {
+          const isIncluded = includeRegexes.some(regex => regex.test(relativePath));
+          if (!isIncluded) {
             continue;
           }
+        }
 
-          // 检查 include 规则（如果指定了）
-          if (includeRegexes) {
-            const isIncluded = includeRegexes.some(regex => regex.test(relativePath));
-            if (!isIncluded) {
-              continue;
-            }
-          }
+        filteredFiles.push(fileUri);
+      }
 
-          const document = await vscode.workspace.openTextDocument(fileUri);
-          const logs = LogScanner.scanDocument(document);
+      console.log(`[LogTreeDataProvider] Filtered to ${filteredFiles.length} files after exclude/include rules`);
 
-          if (logs.length > 0) {
-            console.log(`[LogTreeDataProvider] Found ${logs.length} logs in ${fileUri.fsPath}`);
-          }
+      // 🚀 增量扫描: 只扫描变更的文件
+      const filesToRescan = await this.cacheManager.filterFilesToRescan(filteredFiles);
+      console.log(`[LogTreeDataProvider] Need to rescan ${filesToRescan.length} files (${filteredFiles.length - filesToRescan.length} from cache)`);
 
-          allLogs.push(...logs);
-        } catch (error) {
-          console.error(`Failed to scan file ${fileUri.fsPath}:`, error);
+      // 🎯 异步分批扫描，避免阻塞 UI
+      await this.scanFilesInBatches(filesToRescan);
+
+      // 从所有文件（包括缓存的）收集日志
+      for (const fileUri of filteredFiles) {
+        const cachedLogs = this.cacheManager.get(fileUri.toString());
+        if (cachedLogs) {
+          allLogs.push(...cachedLogs);
         }
       }
 
       console.log(`[LogTreeDataProvider] Total logs found: ${allLogs.length}`);
+      const stats = this.cacheManager.getStats();
+      console.log(`[LogTreeDataProvider] Cache stats: ${stats.totalFiles} files, ${stats.totalLogs} logs`);
     } catch (error) {
       console.error('Failed to scan workspace:', error);
       vscode.window.showErrorMessage(`Failed to scan workspace: ${error}`);
     }
 
     return allLogs;
+  }
+
+  /**
+   * 分批异步扫描文件，避免阻塞 UI
+   * @param files 需要扫描的文件列表
+   */
+  private async scanFilesInBatches(files: vscode.Uri[]): Promise<void> {
+    const BATCH_SIZE = 50; // 每批处理 50 个文件
+    const totalBatches = Math.ceil(files.length / BATCH_SIZE);
+
+    for (let i = 0; i < files.length; i += BATCH_SIZE) {
+      const batch = files.slice(i, i + BATCH_SIZE);
+      const currentBatch = Math.floor(i / BATCH_SIZE) + 1;
+
+      console.log(`[LogTreeDataProvider] Processing batch ${currentBatch}/${totalBatches} (${batch.length} files)`);
+
+      // 并发扫描当前批次的所有文件
+      await Promise.all(
+        batch.map(async (fileUri) => {
+          try {
+            const document = await vscode.workspace.openTextDocument(fileUri);
+            const logs = LogScanner.scanDocument(document);
+
+            // 获取文件修改时间
+            const mtime = await this.cacheManager.getFileMtime(fileUri);
+
+            // 更新缓存
+            this.cacheManager.set(fileUri.toString(), mtime, logs);
+
+            if (logs.length > 0) {
+              console.log(`[LogTreeDataProvider] Found ${logs.length} logs in ${fileUri.fsPath}`);
+            }
+          } catch (error) {
+            console.error(`Failed to scan file ${fileUri.fsPath}:`, error);
+          }
+        })
+      );
+
+      // 让出控制权，避免长时间阻塞
+      await new Promise(resolve => setImmediate(resolve));
+    }
   }
 
   /**
@@ -238,9 +311,12 @@ export class LogTreeDataProvider implements vscode.TreeDataProvider<LogTreeItem>
         };
         result.push(folderNode);
       } else if (node.type === 'file') {
+        // 生成文件显示名称 (处理入口文件)
+        const displayName = this.getFileDisplayName(name, node.relativePath);
+
         const fileNode: LogTreeNodeData = {
           type: 'file',
-          label: name,
+          label: displayName,
           fsPath: node.path,
           relativePath: node.relativePath,
           logCount: node.logs.length,
@@ -256,6 +332,61 @@ export class LogTreeDataProvider implements vscode.TreeDataProvider<LogTreeItem>
     }
 
     return result;
+  }
+
+  /**
+   * 获取文件显示名称
+   * 对于常见的入口文件 (index, main, __init__ 等), 添加父级目录名以便区分
+   */
+  private getFileDisplayName(fileName: string, relativePath: string): string {
+    // 提取文件扩展名和不含扩展名的文件名
+    const fileExt = path.extname(fileName);
+    const fileNameWithoutExt = path.basename(fileName, fileExt);
+
+    // 根据文件扩展名推断语言类型
+    const languageId = this.getLanguageIdFromExtension(fileExt);
+
+    // 获取该语言的适配器
+    const adapter = LanguageAdapterRegistry.get(languageId);
+
+    // 获取该语言的入口文件名列表
+    const entryFileNames = adapter.getEntryFileNames?.() || [];
+
+    // 检查是否是入口文件
+    if (entryFileNames.includes(fileNameWithoutExt)) {
+      // 获取父级目录名
+      const parentDir = path.dirname(relativePath);
+
+      // 如果不是根目录
+      if (parentDir && parentDir !== '.') {
+        // 获取最后一级父目录名
+        const parentDirName = path.basename(parentDir);
+
+        // 返回 "父目录/文件名" 格式
+        return `${parentDirName}/${fileName}`;
+      }
+    }
+
+    // 其他文件直接返回文件名
+    return fileName;
+  }
+
+  /**
+   * 根据文件扩展名推断语言类型
+   */
+  private getLanguageIdFromExtension(extension: string): string {
+    const extMap: Record<string, string> = {
+      '.js': 'javascript',
+      '.jsx': 'javascriptreact',
+      '.ts': 'typescript',
+      '.tsx': 'typescriptreact',
+      '.vue': 'vue',
+      '.py': 'python',
+      '.java': 'java',
+      '.go': 'go'
+    };
+
+    return extMap[extension.toLowerCase()] || 'generic';
   }
 
   /**
