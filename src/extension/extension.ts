@@ -7,6 +7,7 @@ import { LogTreeDataProvider } from './providers/LogTreeDataProvider';
 import { LogTreeItem } from './providers/LogTreeItem';
 import { LogEntry } from './types';
 import { Logger } from './utils/Logger';
+import { AstAnalyzer } from './utils/astAnalyzer';
 
 /**
  * 扩展激活时调用
@@ -18,6 +19,11 @@ export function activate(context: vscode.ExtensionContext) {
 
   // 初始化语言适配器注册表
   LanguageAdapterRegistry.initialize();
+
+  // 【优化】异步预加载 AST 分析器,避免首次使用时卡顿
+  AstAnalyzer.preload().catch(error => {
+    Logger.debug('Failed to preload AST analyzer:', error);
+  });
 
   // 获取工作区根路径
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
@@ -41,7 +47,6 @@ export function activate(context: vscode.ExtensionContext) {
       if (clearCacheTimeout) {
         clearTimeout(clearCacheTimeout);
         clearCacheTimeout = undefined;
-        Logger.debug('TreeView opened, cache cleanup cancelled');
       }
     } else {
       // TreeView 关闭,5分钟后自动清理缓存
@@ -51,7 +56,6 @@ export function activate(context: vscode.ExtensionContext) {
           Logger.info('Cache cleared after 5 minutes of TreeView being closed');
         }
       }, 5 * 60 * 1000); // 5 分钟
-      Logger.debug('TreeView closed, cache will be cleared in 5 minutes');
     }
   });
 
