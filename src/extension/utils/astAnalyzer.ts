@@ -1,4 +1,4 @@
-import type { Program, Statement } from 'oxc-parser';
+import type { Statement } from 'oxc-parser';
 import * as vscode from 'vscode';
 import { Logger } from './Logger';
 import { getOxcParser, type OxcParser as OxcParserLoader } from './oxcLoader';
@@ -10,41 +10,6 @@ export interface InsertPosition {
   line: number; // 插入行号
   character: number; // 插入列号
   indent: string; // 缩进
-}
-
-/**
- * AST 分析器配置
- */
-interface AnalyzerConfig {
-  scope: 'local' | 'file';
-  contextLines: number;
-  maxFileLinesForFullParse: number;
-}
-
-/**
- * 解析选项
- */
-interface ParseOptions {
-  lang: 'js' | 'jsx' | 'ts' | 'tsx';
-  sourceType: 'module' | 'script';
-  range: boolean;
-}
-
-/**
- * 解析错误
- */
-interface ParseError {
-  message: string;
-  line?: number;
-  column?: number;
-}
-
-/**
- * 解析结果
- */
-interface ParseResult {
-  program: Program;
-  errors: ParseError[];
 }
 
 /**
@@ -119,15 +84,20 @@ type LoopStatement = Statement & {
 };
 
 /**
- * AST 分析器 - 完全重构版
+ * AST 分析器 - 基于语句类型的智能插入
  *
- * 核心目标:找到最近的安全插入位置,不会造成语法错误
+ * 核心策略:
+ * 1. 根据语句类型智能选择插入方向:
+ *    - 声明语句(const/let/var) → 向下插入(打印声明的变量)
+ *    - 条件/循环/调用语句(if/map/return等) → 向上插入(在使用前打印)
+ * 2. 通过语法检查验证插入位置的正确性
+ * 3. 语法检查失败时,根据语句类型插入到语句边界
+ * 4. 所有失败情况都有合理的降级策略
  *
- * 策略:
- * 1. 找到包含光标的最小完整语句
- * 2. 如果是 return 语句,插入在它之前
- * 3. 如果是其他语句,插入在它之后
- * 4. 处理嵌套结构(if/for/while/export 等)
+ * 优点:
+ * - 符合调试习惯:声明后打印,使用前检查
+ * - 自动处理各种嵌套情况
+ * - 逻辑简单清晰,易于维护
  */
 export class AstAnalyzer {
   private static parser: OxcParserLoader | null = null;
@@ -168,42 +138,31 @@ export class AstAnalyzer {
     try {
       await this.init();
       if (!this.parser) {
-        Logger.debug('Parser not available');
+        Logger.debug('Parser not available, falling back to simple mode');
         return null;
       }
 
-      const config = this.getConfig();
       const fileLines = document.lineCount;
-
-      // 文件太大则使用局部分析
-      const useLocalScope =
-        config.scope === 'local' || fileLines > config.maxFileLinesForFullParse;
 
       Logger.debug(
         `Analyzing position at line ${cursorPosition.line}, ` +
-          `scope: ${useLocalScope ? 'local' : 'file'}, ` +
           `total lines: ${fileLines}`,
       );
 
-      // 提取代码上下文
-      const context = useLocalScope
-        ? this.extractLocalContext(
-            document,
-            cursorPosition,
-            config.contextLines,
-          )
-        : this.extractFullFile(document);
+      // 始终使用完整文件分析
+      const code = document.getText();
 
-      // 解析并找到插入位置
+      // 解析并找到插入位置(不会返回 null,总是返回一个位置)
       const insertLine = this.findInsertLine(
-        context.code,
-        context.startLine,
+        code,
+        0, // 始终从第 0 行开始
         cursorPosition.line,
         document.languageId,
       );
 
+      // 如果返回 null(parser 不可用),降级到简单模式
       if (insertLine === null) {
-        Logger.debug('Could not determine insert line');
+        Logger.debug('Parser returned null, falling back to simple mode');
         return null;
       }
 
@@ -227,57 +186,15 @@ export class AstAnalyzer {
   }
 
   /**
-   * 获取用户配置
-   */
-  private static getConfig(): AnalyzerConfig {
-    const config = vscode.workspace.getConfiguration('simple-log');
-    return {
-      scope: config.get('astAnalysisScope', 'file'),
-      contextLines: config.get('localContextLines', 15),
-      maxFileLinesForFullParse: config.get('maxFileLinesForFullParse', 10000),
-    };
-  }
-
-  /**
-   * 提取局部上下文
-   */
-  private static extractLocalContext(
-    document: vscode.TextDocument,
-    position: vscode.Position,
-    contextLines: number,
-  ): { code: string; startLine: number } {
-    const totalLines = document.lineCount;
-    const cursorLine = position.line;
-
-    const startLine = Math.max(0, cursorLine - contextLines);
-    const endLine = Math.min(totalLines - 1, cursorLine + contextLines);
-
-    const lines: string[] = [];
-    for (let i = startLine; i <= endLine; i++) {
-      lines.push(document.lineAt(i).text);
-    }
-
-    return {
-      code: lines.join('\n'),
-      startLine,
-    };
-  }
-
-  /**
-   * 提取整个文件
-   */
-  private static extractFullFile(document: vscode.TextDocument): {
-    code: string;
-    startLine: number;
-  } {
-    return {
-      code: document.getText(),
-      startLine: 0,
-    };
-  }
-
-  /**
    * 核心方法:找到最佳插入行
+   *
+   * 新策略:
+   * 1. 判断光标所在语句类型:
+   *    - 声明语句(VariableDeclaration)或函数参数 → 向下插入
+   *    - 其他语句(if/map/return等) → 向上插入
+   * 2. 先尝试插入,通过语法检查验证
+   * 3. 如果语法错误,查找包含光标的语句,插入到语句结束后
+   * 4. 如果查找失败,降级到向下插入
    */
   private static findInsertLine(
     code: string,
@@ -288,7 +205,15 @@ export class AstAnalyzer {
     if (!this.parser) return null;
 
     try {
-      // 解析代码
+      const relativeCursorLine = cursorLine - startLine;
+      const nextLine = relativeCursorLine + 1;
+      const prevLine = relativeCursorLine;
+
+      Logger.debug(
+        `Finding insert line for cursor at ${cursorLine} (relative: ${relativeCursorLine})`,
+      );
+
+      // 步骤 1: 解析代码,找到包含光标的语句
       const lang = this.detectLanguage(languageId);
       const result = this.parser.parseSync('temp.js', code, {
         lang,
@@ -296,26 +221,15 @@ export class AstAnalyzer {
         range: true,
       });
 
-      // 如果有解析错误,返回 null
       if (result.errors && result.errors.length > 0) {
-        Logger.debug(`Parse errors: ${result.errors.length}`);
-        return null;
+        Logger.debug(`Parse errors: ${result.errors.length}, falling back to next line`);
+        return startLine + nextLine;
       }
 
-      // 检查 program 和 body 是否存在
-      if (
-        !result.program ||
-        !result.program.body ||
-        !Array.isArray(result.program.body)
-      ) {
-        Logger.debug(
-          'Invalid parse result: program.body is missing or not an array',
-        );
-        return null;
+      if (!result.program?.body || !Array.isArray(result.program.body)) {
+        Logger.debug('Invalid parse result, falling back to next line');
+        return startLine + nextLine;
       }
-
-      // 计算相对行号
-      const relativeCursorLine = cursorLine - startLine;
 
       // 找到包含光标的语句
       const statement = this.findContainingStatement(
@@ -325,37 +239,143 @@ export class AstAnalyzer {
       );
 
       if (!statement) {
-        Logger.debug('No containing statement found');
-        return null;
+        Logger.debug('No containing statement found, falling back to next line');
+        return startLine + nextLine;
       }
 
-      Logger.debug(`Found statement type: ${statement.type}`);
+      Logger.debug(`Found containing statement: ${statement.type}`);
 
-      // 计算语句的起始和结束行
       const stmtStartLine = this.offsetToLine(code, statement.start);
+
+      // 步骤 2: 判断插入方向
+      const shouldInsertAfter = this.shouldInsertAfterStatement(statement, relativeCursorLine, stmtStartLine);
+
+      if (shouldInsertAfter) {
+        Logger.debug('Statement is declaration or function param, trying to insert after (next line)');
+
+        // 尝试向下插入
+        const testCode = this.insertTestLogAtLine(code, nextLine);
+        if (this.isValidSyntax(testCode, languageId)) {
+          Logger.debug(`Syntax valid, inserting at next line ${startLine + nextLine}`);
+          return startLine + nextLine;
+        }
+
+        Logger.debug('Syntax invalid at next line, trying statement end');
+      } else {
+        Logger.debug('Statement is not declaration, trying to insert before (prev line)');
+
+        // 尝试向上插入
+        const testCode = this.insertTestLogAtLine(code, prevLine);
+        if (this.isValidSyntax(testCode, languageId)) {
+          Logger.debug(`Syntax valid, inserting at prev line ${startLine + prevLine}`);
+          return startLine + prevLine;
+        }
+
+        Logger.debug('Syntax invalid at prev line, trying statement start');
+      }
+
+      // 步骤 3: 语法检查失败,使用语句边界
       const stmtEndLine = this.offsetToLine(code, statement.end);
 
-      Logger.debug(
-        `Statement spans lines ${stmtStartLine}-${stmtEndLine} ` +
-          `(relative), cursor at ${relativeCursorLine}`,
-      );
-
-      // 如果是 return 语句,插入在它之前
-      if (statement.type === 'ReturnStatement') {
-        const insertLine = startLine + stmtStartLine;
-        Logger.debug(
-          `Return statement detected, inserting before at line ${insertLine}`,
-        );
-        return insertLine;
+      // 特殊处理 ReturnStatement: 插入在 return 之前
+      if (statement.type === 'ReturnStatement' && relativeCursorLine === stmtStartLine) {
+        Logger.debug(`Cursor on return statement, inserting before`);
+        return startLine + stmtStartLine;
       }
 
-      // 其他情况,插入在语句结束后
-      const insertLine = startLine + stmtEndLine + 1;
-      Logger.debug(`Inserting after statement at line ${insertLine}`);
-      return insertLine;
+      // 特殊处理 FunctionDeclaration: 插入在函数体开始
+      if (statement.type === 'FunctionDeclaration' && relativeCursorLine === stmtStartLine) {
+        const functionBodyStart = this.findFunctionBodyStart(
+          code,
+          statement.start,
+          statement.end,
+        );
+        if (functionBodyStart !== null) {
+          Logger.debug(`Cursor on function declaration, inserting at body start`);
+          return startLine + functionBodyStart;
+        }
+      }
+
+      // 根据之前的判断决定插入位置
+      if (shouldInsertAfter) {
+        Logger.debug(`Inserting after statement at line ${startLine + stmtEndLine + 1}`);
+        return startLine + stmtEndLine + 1;
+      } else {
+        Logger.debug(`Inserting before statement at line ${startLine + stmtStartLine}`);
+        return startLine + stmtStartLine;
+      }
     } catch (error) {
       Logger.error('Error in findInsertLine', error);
-      return null;
+      // 发生错误时降级到下一行
+      return startLine + (cursorLine - startLine + 1);
+    }
+  }
+
+  /**
+   * 判断是否应该在语句之后插入
+   *
+   * 返回 true: 声明语句或函数参数 → 向下插入
+   * 返回 false: 其他语句 → 向上插入
+   */
+  private static shouldInsertAfterStatement(
+    statement: StatementWithSpan,
+    cursorLine: number,
+    stmtStartLine: number,
+  ): boolean {
+    // 如果是变量声明语句,向下插入
+    if (statement.type === 'VariableDeclaration') {
+      Logger.debug('Statement is VariableDeclaration, will insert after');
+      return true;
+    }
+
+    // 如果是函数声明且光标在函数签名行,向下插入(插入到函数体内)
+    if (statement.type === 'FunctionDeclaration' && cursorLine === stmtStartLine) {
+      Logger.debug('Statement is FunctionDeclaration at cursor line, will insert after');
+      return true;
+    }
+
+    // 其他情况,向上插入
+    Logger.debug(`Statement is ${statement.type}, will insert before`);
+    return false;
+  }
+
+  /**
+   * 在指定行插入测试日志
+   */
+  private static insertTestLogAtLine(code: string, line: number): string {
+    const lines = code.split('\n');
+    if (line < 0 || line > lines.length) {
+      return code;
+    }
+
+    // 获取插入行的缩进
+    const indent = line < lines.length ? this.extractIndent(lines[line]) : '';
+
+    // 插入一个简单的 console.log 语句
+    const testLog = `${indent}console.log('test');`;
+    lines.splice(line, 0, testLog);
+
+    return lines.join('\n');
+  }
+
+  /**
+   * 检查代码语法是否正确
+   */
+  private static isValidSyntax(code: string, languageId: string): boolean {
+    if (!this.parser) return false;
+
+    try {
+      const lang = this.detectLanguage(languageId);
+      const result = this.parser.parseSync('temp.js', code, {
+        lang,
+        sourceType: 'module',
+        range: true,
+      });
+
+      // 没有错误就是语法正确
+      return !result.errors || result.errors.length === 0;
+    } catch (error) {
+      return false;
     }
   }
 
@@ -468,6 +488,20 @@ export class AstAnalyzer {
             Logger.debug(
               `Found better match in nested: ${nested.type}, size: ${nestedSize}`,
             );
+          }
+        } else if (nestedStatements.length > 0) {
+          // 如果有嵌套语句但没找到匹配的,可能光标在函数签名行
+          // 检查第一个嵌套语句是否在目标行之后
+          const firstNested = nestedStatements[0];
+          if (this.hasValidSpan(firstNested)) {
+            const firstNestedLine = this.offsetToLine(code, firstNested.start);
+            if (firstNestedLine > targetLine) {
+              // 光标在嵌套语句开始之前,使用当前语句作为最佳匹配
+              Logger.debug(
+                `Target line ${targetLine} is before first nested statement at line ${firstNestedLine}, using current statement`,
+              );
+              // 这种情况下,bestMatch 已经设置为当前语句了,不需要额外处理
+            }
           }
         }
       }
@@ -609,6 +643,21 @@ export class AstAnalyzer {
       nested.push(...this.extractStatementsFromExpression(exprStmt.expression));
     }
 
+    // ReturnStatement: 检查返回值表达式中的语句
+    if (stmt.type === 'ReturnStatement') {
+      const returnStmt = stmt as Statement & { argument?: unknown };
+      if (returnStmt.argument) {
+        Logger.debug(
+          `ReturnStatement argument type: ${(returnStmt.argument as any)?.type || 'unknown'}`,
+        );
+        const extracted = this.extractStatementsFromExpression(returnStmt.argument);
+        Logger.debug(
+          `Extracted ${extracted.length} statements from ReturnStatement`,
+        );
+        nested.push(...extracted);
+      }
+    }
+
     // IfStatement 有 consequent 和 alternate
     if (this.isIfStatement(stmt)) {
       if (stmt.consequent) {
@@ -671,10 +720,16 @@ export class AstAnalyzer {
     const statements: Statement[] = [];
 
     if (!expr || typeof expr !== 'object') {
+      Logger.debug(
+        `extractStatementsFromExpression: expr is ${typeof expr}`,
+      );
       return statements;
     }
 
     const exprObj = expr as { type?: string; [key: string]: unknown };
+    Logger.debug(
+      `extractStatementsFromExpression: processing ${exprObj.type || 'unknown type'}`,
+    );
 
     // ArrowFunctionExpression 或 FunctionExpression
     if (
@@ -682,11 +737,17 @@ export class AstAnalyzer {
       exprObj.type === 'FunctionExpression'
     ) {
       const body = exprObj.body;
+      Logger.debug(
+        `Processing ${exprObj.type}, body type: ${body && typeof body === 'object' ? (body as any).type || 'object' : typeof body}`,
+      );
 
       // 如果 body 是 BlockStatement
       if (body && typeof body === 'object' && 'body' in body) {
         const bodyStatements = (body as { body: unknown }).body;
         if (Array.isArray(bodyStatements)) {
+          Logger.debug(
+            `Extracted ${bodyStatements.length} statements from ${exprObj.type} body`,
+          );
           statements.push(...bodyStatements);
         }
       }
@@ -726,7 +787,85 @@ export class AstAnalyzer {
       }
     }
 
+    // JSXElement: 检查 children 中的表达式
+    if (exprObj.type === 'JSXElement' || exprObj.type === 'JSXFragment') {
+      const children = exprObj.children;
+      if (Array.isArray(children)) {
+        Logger.debug(
+          `Processing JSX with ${children.length} children`,
+        );
+        for (const child of children) {
+          const childStatements = this.extractStatementsFromExpression(child);
+          Logger.debug(
+            `Extracted ${childStatements.length} statements from JSX child`,
+          );
+          statements.push(...childStatements);
+        }
+      }
+    }
+
+    // JSXExpressionContainer: 提取表达式
+    if (exprObj.type === 'JSXExpressionContainer') {
+      const expression = exprObj.expression;
+      if (expression) {
+        Logger.debug(
+          `Processing JSXExpressionContainer with expression type: ${(expression as any).type || 'unknown'}`,
+        );
+        const exprStatements = this.extractStatementsFromExpression(expression);
+        Logger.debug(
+          `Extracted ${exprStatements.length} statements from JSXExpressionContainer`,
+        );
+        statements.push(...exprStatements);
+      }
+    }
+
+    // ParenthesizedExpression: 提取括号内的表达式
+    if (exprObj.type === 'ParenthesizedExpression') {
+      const expression = exprObj.expression;
+      if (expression) {
+        Logger.debug(
+          `Processing ParenthesizedExpression`,
+        );
+        statements.push(...this.extractStatementsFromExpression(expression));
+      }
+    }
+
     return statements;
+  }
+
+  /**
+   * 找到函数体的开始行(第一个 { 之后的第一行)
+   */
+  private static findFunctionBodyStart(
+    code: string,
+    start: number,
+    end: number,
+  ): number | null {
+    // 找到函数的代码片段
+    const functionCode = code.substring(start, end);
+
+    // 找到第一个 { 的位置
+    const openBraceIndex = functionCode.indexOf('{');
+    if (openBraceIndex === -1) {
+      // 可能是箭头函数没有花括号的情况
+      return null;
+    }
+
+    // 计算 { 之后的第一个换行符位置
+    const afterBrace = start + openBraceIndex + 1;
+    let currentPos = afterBrace;
+
+    // 跳过 { 后的空白字符,找到下一行
+    while (currentPos < code.length) {
+      if (code[currentPos] === '\n') {
+        // 找到换行符,返回下一行的行号
+        return this.offsetToLine(code, currentPos + 1);
+      }
+      currentPos++;
+    }
+
+    // 如果没有找到换行符,返回 { 所在行的下一行
+    return this.offsetToLine(code, afterBrace) + 1;
   }
 
   /**
