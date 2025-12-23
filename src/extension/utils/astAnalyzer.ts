@@ -88,7 +88,12 @@ type LoopStatement = Statement & {
  *
  * 核心策略:
  * 1. 根据语句类型智能选择插入方向:
- *    - 声明语句(const/let/var) → 向下插入(打印声明的变量)
+ *    - 声明语句 → 向下插入(打印声明的变量)
+ *      • 变量声明: const/let/var (包括解构赋值)
+ *      • 类声明: class
+ *      • 函数声明: function
+ *      • 导入声明: import
+ *      • 赋值表达式: = (包括解构赋值)
  *    - 条件/循环/调用语句(if/map/return等) → 向上插入(在使用前打印)
  * 2. 通过语法检查验证插入位置的正确性
  * 3. 语法检查失败时,根据语句类型插入到语句边界
@@ -97,11 +102,19 @@ type LoopStatement = Statement & {
  * 优点:
  * - 符合调试习惯:声明后打印,使用前检查
  * - 自动处理各种嵌套情况
+ * - 全面支持 JavaScript/TypeScript 各种声明方式
  * - 逻辑简单清晰,易于维护
  */
 export class AstAnalyzer {
   private static parser: OxcParserLoader | null = null;
   private static initPromise: Promise<void> | null = null;
+
+  /**
+   * 预加载 parser (扩展激活时调用,避免首次使用卡顿)
+   */
+  static async preload(): Promise<void> {
+    await this.init();
+  }
 
   /**
    * 初始化 oxc-parser(异步加载 ESM 模块)
@@ -142,13 +155,6 @@ export class AstAnalyzer {
         return null;
       }
 
-      const fileLines = document.lineCount;
-
-      Logger.debug(
-        `Analyzing position at line ${cursorPosition.line}, ` +
-          `total lines: ${fileLines}`,
-      );
-
       // 始终使用完整文件分析
       const code = document.getText();
 
@@ -170,10 +176,6 @@ export class AstAnalyzer {
       const insertLineText = document.lineAt(insertLine).text;
       const indent = this.extractIndent(insertLineText);
 
-      Logger.debug(
-        `Insert line determined: ${insertLine}, indent: ${indent.length} chars`,
-      );
-
       return {
         line: insertLine,
         character: 0,
@@ -190,7 +192,9 @@ export class AstAnalyzer {
    *
    * 新策略:
    * 1. 判断光标所在语句类型:
-   *    - 声明语句(VariableDeclaration)或函数参数 → 向下插入
+   *    - 声明语句 → 向下插入
+   *      (VariableDeclaration, ClassDeclaration, FunctionDeclaration,
+   *       ImportDeclaration, AssignmentExpression)
    *    - 其他语句(if/map/return等) → 向上插入
    * 2. 先尝试插入,通过语法检查验证
    * 3. 如果语法错误,查找包含光标的语句,插入到语句结束后
@@ -209,10 +213,6 @@ export class AstAnalyzer {
       const nextLine = relativeCursorLine + 1;
       const prevLine = relativeCursorLine;
 
-      Logger.debug(
-        `Finding insert line for cursor at ${cursorLine} (relative: ${relativeCursorLine})`,
-      );
-
       // 步骤 1: 解析代码,找到包含光标的语句
       const lang = this.detectLanguage(languageId);
       const result = this.parser.parseSync('temp.js', code, {
@@ -222,12 +222,10 @@ export class AstAnalyzer {
       });
 
       if (result.errors && result.errors.length > 0) {
-        Logger.debug(`Parse errors: ${result.errors.length}, falling back to next line`);
         return startLine + nextLine;
       }
 
       if (!result.program?.body || !Array.isArray(result.program.body)) {
-        Logger.debug('Invalid parse result, falling back to next line');
         return startLine + nextLine;
       }
 
@@ -239,11 +237,8 @@ export class AstAnalyzer {
       );
 
       if (!statement) {
-        Logger.debug('No containing statement found, falling back to next line');
         return startLine + nextLine;
       }
-
-      Logger.debug(`Found containing statement: ${statement.type}`);
 
       const stmtStartLine = this.offsetToLine(code, statement.start);
 
@@ -251,27 +246,17 @@ export class AstAnalyzer {
       const shouldInsertAfter = this.shouldInsertAfterStatement(statement, relativeCursorLine, stmtStartLine);
 
       if (shouldInsertAfter) {
-        Logger.debug('Statement is declaration or function param, trying to insert after (next line)');
-
         // 尝试向下插入
         const testCode = this.insertTestLogAtLine(code, nextLine);
         if (this.isValidSyntax(testCode, languageId)) {
-          Logger.debug(`Syntax valid, inserting at next line ${startLine + nextLine}`);
           return startLine + nextLine;
         }
-
-        Logger.debug('Syntax invalid at next line, trying statement end');
       } else {
-        Logger.debug('Statement is not declaration, trying to insert before (prev line)');
-
         // 尝试向上插入
         const testCode = this.insertTestLogAtLine(code, prevLine);
         if (this.isValidSyntax(testCode, languageId)) {
-          Logger.debug(`Syntax valid, inserting at prev line ${startLine + prevLine}`);
           return startLine + prevLine;
         }
-
-        Logger.debug('Syntax invalid at prev line, trying statement start');
       }
 
       // 步骤 3: 语法检查失败,使用语句边界
@@ -279,7 +264,6 @@ export class AstAnalyzer {
 
       // 特殊处理 ReturnStatement: 插入在 return 之前
       if (statement.type === 'ReturnStatement' && relativeCursorLine === stmtStartLine) {
-        Logger.debug(`Cursor on return statement, inserting before`);
         return startLine + stmtStartLine;
       }
 
@@ -291,17 +275,14 @@ export class AstAnalyzer {
           statement.end,
         );
         if (functionBodyStart !== null) {
-          Logger.debug(`Cursor on function declaration, inserting at body start`);
           return startLine + functionBodyStart;
         }
       }
 
       // 根据之前的判断决定插入位置
       if (shouldInsertAfter) {
-        Logger.debug(`Inserting after statement at line ${startLine + stmtEndLine + 1}`);
         return startLine + stmtEndLine + 1;
       } else {
-        Logger.debug(`Inserting before statement at line ${startLine + stmtStartLine}`);
         return startLine + stmtStartLine;
       }
     } catch (error) {
@@ -322,20 +303,35 @@ export class AstAnalyzer {
     cursorLine: number,
     stmtStartLine: number,
   ): boolean {
-    // 如果是变量声明语句,向下插入
+    // 1. 变量声明: const/let/var (包括解构赋值)
     if (statement.type === 'VariableDeclaration') {
-      Logger.debug('Statement is VariableDeclaration, will insert after');
       return true;
     }
 
-    // 如果是函数声明且光标在函数签名行,向下插入(插入到函数体内)
-    if (statement.type === 'FunctionDeclaration' && cursorLine === stmtStartLine) {
-      Logger.debug('Statement is FunctionDeclaration at cursor line, will insert after');
+    // 2. 类声明: class
+    if (statement.type === 'ClassDeclaration') {
       return true;
+    }
+
+    // 3. 函数声明: function (且光标在函数签名行,向下插入到函数体内)
+    if (statement.type === 'FunctionDeclaration' && cursorLine === stmtStartLine) {
+      return true;
+    }
+
+    // 4. 导入声明: import
+    if (statement.type === 'ImportDeclaration') {
+      return true;
+    }
+
+    // 5. 赋值表达式 (包括解构赋值)
+    if (statement.type === 'ExpressionStatement') {
+      const exprStmt = statement as Statement & { expression?: any };
+      if (exprStmt.expression?.type === 'AssignmentExpression') {
+        return true;
+      }
     }
 
     // 其他情况,向上插入
-    Logger.debug(`Statement is ${statement.type}, will insert before`);
     return false;
   }
 
@@ -394,36 +390,19 @@ export class AstAnalyzer {
   ): StatementWithSpan | null {
     // 添加安全检查
     if (!statements || !Array.isArray(statements) || statements.length === 0) {
-      Logger.debug('findContainingStatement: statements is empty or invalid');
       return null;
     }
 
     let bestMatch: StatementWithSpan | null = null;
     let bestMatchSize = Infinity;
 
-    Logger.debug(
-      `findContainingStatement: checking ${statements.length} statements for target line ${targetLine}`,
-    );
-
     for (const stmt of statements) {
       if (!this.hasValidSpan(stmt)) {
-        Logger.debug(
-          `Statement ${
-            (stmt as any).type || 'unknown'
-          } has no valid span, skipping`,
-        );
         continue;
       }
 
       const stmtStartLine = this.offsetToLine(code, stmt.start);
       const stmtEndLine = this.offsetToLine(code, stmt.end);
-
-      Logger.debug(
-        `Checking ${stmt.type}: lines ${stmtStartLine}-${stmtEndLine}, ` +
-          `target: ${targetLine}, contains: ${
-            targetLine >= stmtStartLine && targetLine <= stmtEndLine
-          }`,
-      );
 
       // 检查目标行是否在语句范围内
       if (targetLine < stmtStartLine || targetLine > stmtEndLine) {
@@ -431,14 +410,10 @@ export class AstAnalyzer {
       }
 
       const stmtSize = stmtEndLine - stmtStartLine;
-      Logger.debug(
-        `Statement ${stmt.type} contains target line, size: ${stmtSize}`,
-      );
 
       // 处理 export 包装语句,深入到内部声明
       const unwrapped = this.unwrapExportDeclaration(stmt);
       if (unwrapped && unwrapped !== stmt) {
-        Logger.debug(`Unwrapping export declaration to ${unwrapped.type}`);
         const nested = this.findContainingStatement(
           [unwrapped],
           code,
@@ -451,9 +426,6 @@ export class AstAnalyzer {
           if (nestedSize < bestMatchSize) {
             bestMatch = nested;
             bestMatchSize = nestedSize;
-            Logger.debug(
-              `Found better match in unwrapped: ${nested.type}, size: ${nestedSize}`,
-            );
           }
           continue;
         }
@@ -463,14 +435,10 @@ export class AstAnalyzer {
       if (stmtSize < bestMatchSize) {
         bestMatch = stmt as StatementWithSpan;
         bestMatchSize = stmtSize;
-        Logger.debug(`New best match: ${stmt.type}, size: ${stmtSize}`);
       }
 
       // 递归检查嵌套的语句块
       const nestedStatements = this.getNestedStatements(stmt);
-      Logger.debug(
-        `Extracting nested statements from ${stmt.type}: found ${nestedStatements.length}`,
-      );
 
       if (nestedStatements.length > 0) {
         const nested = this.findContainingStatement(
@@ -485,9 +453,6 @@ export class AstAnalyzer {
           if (nestedSize < bestMatchSize) {
             bestMatch = nested;
             bestMatchSize = nestedSize;
-            Logger.debug(
-              `Found better match in nested: ${nested.type}, size: ${nestedSize}`,
-            );
           }
         } else if (nestedStatements.length > 0) {
           // 如果有嵌套语句但没找到匹配的,可能光标在函数签名行
@@ -497,9 +462,6 @@ export class AstAnalyzer {
             const firstNestedLine = this.offsetToLine(code, firstNested.start);
             if (firstNestedLine > targetLine) {
               // 光标在嵌套语句开始之前,使用当前语句作为最佳匹配
-              Logger.debug(
-                `Target line ${targetLine} is before first nested statement at line ${firstNestedLine}, using current statement`,
-              );
               // 这种情况下,bestMatch 已经设置为当前语句了,不需要额外处理
             }
           }
@@ -507,7 +469,6 @@ export class AstAnalyzer {
       }
     }
 
-    Logger.debug(`Best match result: ${bestMatch?.type || 'null'}`);
     return bestMatch;
   }
 
@@ -647,13 +608,7 @@ export class AstAnalyzer {
     if (stmt.type === 'ReturnStatement') {
       const returnStmt = stmt as Statement & { argument?: unknown };
       if (returnStmt.argument) {
-        Logger.debug(
-          `ReturnStatement argument type: ${(returnStmt.argument as any)?.type || 'unknown'}`,
-        );
         const extracted = this.extractStatementsFromExpression(returnStmt.argument);
-        Logger.debug(
-          `Extracted ${extracted.length} statements from ReturnStatement`,
-        );
         nested.push(...extracted);
       }
     }
@@ -720,16 +675,10 @@ export class AstAnalyzer {
     const statements: Statement[] = [];
 
     if (!expr || typeof expr !== 'object') {
-      Logger.debug(
-        `extractStatementsFromExpression: expr is ${typeof expr}`,
-      );
       return statements;
     }
 
     const exprObj = expr as { type?: string; [key: string]: unknown };
-    Logger.debug(
-      `extractStatementsFromExpression: processing ${exprObj.type || 'unknown type'}`,
-    );
 
     // ArrowFunctionExpression 或 FunctionExpression
     if (
@@ -737,17 +686,11 @@ export class AstAnalyzer {
       exprObj.type === 'FunctionExpression'
     ) {
       const body = exprObj.body;
-      Logger.debug(
-        `Processing ${exprObj.type}, body type: ${body && typeof body === 'object' ? (body as any).type || 'object' : typeof body}`,
-      );
 
       // 如果 body 是 BlockStatement
       if (body && typeof body === 'object' && 'body' in body) {
         const bodyStatements = (body as { body: unknown }).body;
         if (Array.isArray(bodyStatements)) {
-          Logger.debug(
-            `Extracted ${bodyStatements.length} statements from ${exprObj.type} body`,
-          );
           statements.push(...bodyStatements);
         }
       }
@@ -791,14 +734,8 @@ export class AstAnalyzer {
     if (exprObj.type === 'JSXElement' || exprObj.type === 'JSXFragment') {
       const children = exprObj.children;
       if (Array.isArray(children)) {
-        Logger.debug(
-          `Processing JSX with ${children.length} children`,
-        );
         for (const child of children) {
           const childStatements = this.extractStatementsFromExpression(child);
-          Logger.debug(
-            `Extracted ${childStatements.length} statements from JSX child`,
-          );
           statements.push(...childStatements);
         }
       }
@@ -808,13 +745,7 @@ export class AstAnalyzer {
     if (exprObj.type === 'JSXExpressionContainer') {
       const expression = exprObj.expression;
       if (expression) {
-        Logger.debug(
-          `Processing JSXExpressionContainer with expression type: ${(expression as any).type || 'unknown'}`,
-        );
         const exprStatements = this.extractStatementsFromExpression(expression);
-        Logger.debug(
-          `Extracted ${exprStatements.length} statements from JSXExpressionContainer`,
-        );
         statements.push(...exprStatements);
       }
     }
@@ -823,9 +754,6 @@ export class AstAnalyzer {
     if (exprObj.type === 'ParenthesizedExpression') {
       const expression = exprObj.expression;
       if (expression) {
-        Logger.debug(
-          `Processing ParenthesizedExpression`,
-        );
         statements.push(...this.extractStatementsFromExpression(expression));
       }
     }
