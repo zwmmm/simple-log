@@ -48,3 +48,5 @@ postcss.config.js
 !LICENSE
 !package.json
 !icon.png
+
+.cache/
