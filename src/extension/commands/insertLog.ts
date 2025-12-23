@@ -62,44 +62,28 @@ export async function insertLogCommand(): Promise<void> {
   let insertLine: number;
   let indent: string;
 
-  Logger.debug(`Language: ${languageId}`);
-  Logger.debug(
-    `Adapter has analyzeInsertPosition: ${!!adapter.analyzeInsertPosition}`,
-  );
-
   if (adapter.analyzeInsertPosition) {
     // 适配器支持智能分析
-    Logger.debug(
-      `Calling adapter.analyzeInsertPosition for line: ${cursorLine}`,
-    );
     const result = await adapter.analyzeInsertPosition(
       editor.document,
       cursorLine,
     );
-    Logger.debug(`analyzeInsertPosition result: ${JSON.stringify(result)}`);
 
     if (result) {
       // 使用智能分析结果
       insertLine = result.line;
       indent = result.indent;
-      Logger.debug(`Using smart mode: insertLine = ${insertLine}`);
     } else {
       // 智能分析失败或返回 null,使用简单模式
       insertLine = cursorLine + 1;
       const currentLineText = editor.document.lineAt(cursorLine).text;
       indent = getIndentation(currentLineText);
-      Logger.debug(
-        `Smart analysis returned null, using simple mode: insertLine = ${insertLine}`,
-      );
     }
   } else {
     // 适配器不支持智能分析,使用简单模式
     insertLine = cursorLine + 1;
     const currentLineText = editor.document.lineAt(cursorLine).text;
     indent = getIndentation(currentLineText);
-    Logger.debug(
-      `Adapter does not support smart analysis, using simple mode: insertLine = ${insertLine}`,
-    );
   }
 
   // 8. 计算插入位置

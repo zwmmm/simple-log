@@ -136,8 +136,6 @@ export class LogTreeDataProvider
         '**/node_modules/**',
       );
 
-      Logger.debug(`Found ${files.length} files to scan`);
-
       // 过滤文件列表
       const filteredFiles: vscode.Uri[] = [];
       for (const fileUri of files) {
@@ -164,18 +162,9 @@ export class LogTreeDataProvider
         filteredFiles.push(fileUri);
       }
 
-      Logger.debug(
-        `Filtered to ${filteredFiles.length} files after exclude/include rules`,
-      );
-
       // 🚀 增量扫描: 只扫描变更的文件
       const filesToRescan = await this.cacheManager.filterFilesToRescan(
         filteredFiles,
-      );
-      Logger.debug(
-        `Need to rescan ${filesToRescan.length} files (${
-          filteredFiles.length - filesToRescan.length
-        } from cache)`,
       );
 
       // 🎯 异步分批扫描，避免阻塞 UI
@@ -190,10 +179,6 @@ export class LogTreeDataProvider
       }
 
       Logger.info(`Total logs found: ${allLogs.length}`);
-      const stats = this.cacheManager.getStats();
-      Logger.debug(
-        `Cache stats: ${stats.totalFiles} files, ${stats.totalLogs} logs`,
-      );
     } catch (error) {
       Logger.error('Failed to scan workspace', error);
       vscode.window.showErrorMessage(`Failed to scan workspace: ${error}`);
@@ -212,11 +197,6 @@ export class LogTreeDataProvider
 
     for (let i = 0; i < files.length; i += BATCH_SIZE) {
       const batch = files.slice(i, i + BATCH_SIZE);
-      const currentBatch = Math.floor(i / BATCH_SIZE) + 1;
-
-      Logger.debug(
-        `Processing batch ${currentBatch}/${totalBatches} (${batch.length} files)`,
-      );
 
       // 并发扫描当前批次的所有文件
       await Promise.all(
@@ -230,12 +210,6 @@ export class LogTreeDataProvider
 
             // 更新缓存
             this.cacheManager.set(fileUri.toString(), mtime, logs);
-
-            if (logs.length > 0) {
-              Logger.debug(
-                `Found ${logs.length} logs in ${fileUri.fsPath}`,
-              );
-            }
           } catch (error) {
             Logger.error(`Failed to scan file ${fileUri.fsPath}`, error);
           }
