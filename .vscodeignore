@@ -4,6 +4,8 @@
 src/**
 .gitignore
 .yarnrc
+pnpm-lock.yaml
+.spec-workflow/**
 vsc-extension-quickstart.md
 **/tsconfig.json
 **/*.map
@@ -19,6 +21,9 @@ docs/**
 
 # Dependencies
 node_modules/**
+
+# Build scripts (not needed in published extension)
+scripts/**
 
 # Test files
 .vscode-test/**
