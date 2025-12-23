@@ -22,7 +22,6 @@ export class Logger {
   static info(message: string, ...args: any[]): void {
     const formattedMessage = this.formatMessage('INFO', message, args);
     this.outputChannel.appendLine(formattedMessage);
-    console.log(formattedMessage); // 同时输出到开发者控制台
   }
 
   /**
@@ -31,7 +30,6 @@ export class Logger {
   static warn(message: string, ...args: any[]): void {
     const formattedMessage = this.formatMessage('WARN', message, args);
     this.outputChannel.appendLine(formattedMessage);
-    console.warn(formattedMessage);
   }
 
   /**
@@ -43,7 +41,6 @@ export class Logger {
       : '';
     const formattedMessage = this.formatMessage('ERROR', message) + errorDetail;
     this.outputChannel.appendLine(formattedMessage);
-    console.error(formattedMessage);
   }
 
   /**
@@ -52,7 +49,6 @@ export class Logger {
   static debug(message: string, ...args: any[]): void {
     const formattedMessage = this.formatMessage('DEBUG', message, args);
     this.outputChannel.appendLine(formattedMessage);
-    console.debug(formattedMessage);
   }
 
   /**
