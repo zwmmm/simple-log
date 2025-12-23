@@ -52,29 +52,41 @@ Support mainstream development languages with one plugin for all your projects:
 
 **Dual-Mode Adaptive**:
 - **Simple Mode**: Lightning-fast insertion, works with all languages ⚡
-- **Smart Mode**: Deep AST analysis, avoids syntax errors (JS/TS exclusive) 🧠
+- **Smart Mode**: Context-aware intelligent positioning (JS/TS exclusive) 🧠
 
-**Smart Recognition Scenarios**:
+**Smart Insertion Strategy** - Follows debugging intuition:
+
 ```javascript
-// ✅ Correctly identifies function call chains
-const result = await fetch(url)
-  .then(res => res.json())
-  .then(data => data.items);
-// 📝 Log inserted after chain completion
+// ✅ Variable Declaration → Insert AFTER (print the declared value)
+const userId = user.id;
+console.log('📝 userId:', userId);  // ← Auto-inserted after declaration
 
-// ✅ Properly handles object literals
-const config = {
-  api: 'https://api.example.com',
-  timeout: 5000
-};
-// 📝 Log inserted after object definition
-
-// ✅ Correctly processes nested structures
-if (user) {
-  const profile = user.getProfile();
-  // 📝 Log won't break statement structure
+// ✅ Condition Check → Insert BEFORE (check value before use)
+console.log('📝 isValid:', isValid);  // ← Auto-inserted before condition
+if (isValid) {
+  processData();
 }
+
+// ✅ Function Call Chain → Insert BEFORE (inspect parameters)
+console.log('📝 items:', items);  // ← Auto-inserted before map
+items.map(item => transform(item));
+
+// ✅ JSX Nested Functions → Automatically handled
+return (
+  <Form.List>
+    {(fields, operation) => {
+      console.log('📝 fields:', fields);  // ← Correctly inserted in function body
+      const filtered = fields.filter(f => f.active);
+      return <div>{filtered}</div>;
+    }}
+  </Form.List>
+);
 ```
+
+**Why This Matters**:
+- 📥 **Declarations**: You want to see the value *after* assignment
+- 📤 **Usage**: You want to verify values *before* they're used
+- 🎯 **Result**: Logs appear exactly where you need them for debugging
 
 ### 🎨 Flexible Customization
 
