@@ -47,6 +47,7 @@ export function activate(context: vscode.ExtensionContext) {
       if (clearCacheTimeout) {
         clearTimeout(clearCacheTimeout);
         clearCacheTimeout = undefined;
+        Logger.debug('TreeView opened, cache cleanup cancelled');
       }
     } else {
       // TreeView 关闭,5分钟后自动清理缓存
@@ -56,6 +57,7 @@ export function activate(context: vscode.ExtensionContext) {
           Logger.info('Cache cleared after 5 minutes of TreeView being closed');
         }
       }, 5 * 60 * 1000); // 5 分钟
+      Logger.debug('TreeView closed, cache will be cleared in 5 minutes');
     }
   });
 
@@ -106,7 +108,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('simple-log')) {
-        Logger.info('Configuration updated');
+        treeDataProvider.refresh();
       }
     })
   );
@@ -119,7 +121,6 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   const supportedLanguages = LanguageAdapterRegistry.getSupportedLanguages();
-  Logger.info(`Registered ${commands.length} commands`);
   Logger.info(`Supporting ${supportedLanguages.length} languages: ${supportedLanguages.join(', ')}`);
 }
 
