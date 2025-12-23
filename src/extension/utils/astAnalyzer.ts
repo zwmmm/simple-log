@@ -1,6 +1,7 @@
 import type { Program, Statement } from 'oxc-parser';
 import * as vscode from 'vscode';
 import { Logger } from './Logger';
+import { getOxcParser, type OxcParser as OxcParserLoader } from './oxcLoader';
 
 /**
  * 插入位置分析结果
@@ -44,17 +45,6 @@ interface ParseError {
 interface ParseResult {
   program: Program;
   errors: ParseError[];
-}
-
-/**
- * oxc-parser 类型定义
- */
-interface OxcParser {
-  parseSync: (
-    filename: string,
-    sourceText: string,
-    options?: ParseOptions,
-  ) => ParseResult;
 }
 
 /**
@@ -140,7 +130,7 @@ type LoopStatement = Statement & {
  * 4. 处理嵌套结构(if/for/while/export 等)
  */
 export class AstAnalyzer {
-  private static parser: OxcParser | null = null;
+  private static parser: OxcParserLoader | null = null;
   private static initPromise: Promise<void> | null = null;
 
   /**
@@ -152,9 +142,13 @@ export class AstAnalyzer {
 
     this.initPromise = (async () => {
       try {
-        const oxc = await import('oxc-parser');
+        const oxc = await getOxcParser();
         this.parser = oxc;
-        Logger.info('oxc-parser initialized successfully');
+        if (oxc) {
+          Logger.info('oxc-parser initialized successfully');
+        } else {
+          Logger.error('Failed to load oxc-parser for current platform');
+        }
       } catch (error) {
         Logger.error('Failed to initialize oxc-parser', error);
         this.parser = null;
@@ -183,18 +177,21 @@ export class AstAnalyzer {
 
       // 文件太大则使用局部分析
       const useLocalScope =
-        config.scope === 'local' ||
-        fileLines > config.maxFileLinesForFullParse;
+        config.scope === 'local' || fileLines > config.maxFileLinesForFullParse;
 
       Logger.debug(
         `Analyzing position at line ${cursorPosition.line}, ` +
-        `scope: ${useLocalScope ? 'local' : 'file'}, ` +
-        `total lines: ${fileLines}`
+          `scope: ${useLocalScope ? 'local' : 'file'}, ` +
+          `total lines: ${fileLines}`,
       );
 
       // 提取代码上下文
       const context = useLocalScope
-        ? this.extractLocalContext(document, cursorPosition, config.contextLines)
+        ? this.extractLocalContext(
+            document,
+            cursorPosition,
+            config.contextLines,
+          )
         : this.extractFullFile(document);
 
       // 解析并找到插入位置
@@ -214,7 +211,9 @@ export class AstAnalyzer {
       const insertLineText = document.lineAt(insertLine).text;
       const indent = this.extractIndent(insertLineText);
 
-      Logger.debug(`Insert line determined: ${insertLine}, indent: ${indent.length} chars`);
+      Logger.debug(
+        `Insert line determined: ${insertLine}, indent: ${indent.length} chars`,
+      );
 
       return {
         line: insertLine,
@@ -303,6 +302,18 @@ export class AstAnalyzer {
         return null;
       }
 
+      // 检查 program 和 body 是否存在
+      if (
+        !result.program ||
+        !result.program.body ||
+        !Array.isArray(result.program.body)
+      ) {
+        Logger.debug(
+          'Invalid parse result: program.body is missing or not an array',
+        );
+        return null;
+      }
+
       // 计算相对行号
       const relativeCursorLine = cursorLine - startLine;
 
@@ -326,13 +337,15 @@ export class AstAnalyzer {
 
       Logger.debug(
         `Statement spans lines ${stmtStartLine}-${stmtEndLine} ` +
-        `(relative), cursor at ${relativeCursorLine}`
+          `(relative), cursor at ${relativeCursorLine}`,
       );
 
       // 如果是 return 语句,插入在它之前
       if (statement.type === 'ReturnStatement') {
         const insertLine = startLine + stmtStartLine;
-        Logger.debug(`Return statement detected, inserting before at line ${insertLine}`);
+        Logger.debug(
+          `Return statement detected, inserting before at line ${insertLine}`,
+        );
         return insertLine;
       }
 
@@ -340,7 +353,6 @@ export class AstAnalyzer {
       const insertLine = startLine + stmtEndLine + 1;
       Logger.debug(`Inserting after statement at line ${insertLine}`);
       return insertLine;
-
     } catch (error) {
       Logger.error('Error in findInsertLine', error);
       return null;
@@ -360,14 +372,26 @@ export class AstAnalyzer {
     code: string,
     targetLine: number,
   ): StatementWithSpan | null {
+    // 添加安全检查
+    if (!statements || !Array.isArray(statements) || statements.length === 0) {
+      Logger.debug('findContainingStatement: statements is empty or invalid');
+      return null;
+    }
+
     let bestMatch: StatementWithSpan | null = null;
     let bestMatchSize = Infinity;
 
-    Logger.debug(`findContainingStatement: checking ${statements.length} statements for target line ${targetLine}`);
+    Logger.debug(
+      `findContainingStatement: checking ${statements.length} statements for target line ${targetLine}`,
+    );
 
     for (const stmt of statements) {
       if (!this.hasValidSpan(stmt)) {
-        Logger.debug(`Statement ${(stmt as any).type || 'unknown'} has no valid span, skipping`);
+        Logger.debug(
+          `Statement ${
+            (stmt as any).type || 'unknown'
+          } has no valid span, skipping`,
+        );
         continue;
       }
 
@@ -376,7 +400,9 @@ export class AstAnalyzer {
 
       Logger.debug(
         `Checking ${stmt.type}: lines ${stmtStartLine}-${stmtEndLine}, ` +
-        `target: ${targetLine}, contains: ${targetLine >= stmtStartLine && targetLine <= stmtEndLine}`
+          `target: ${targetLine}, contains: ${
+            targetLine >= stmtStartLine && targetLine <= stmtEndLine
+          }`,
       );
 
       // 检查目标行是否在语句范围内
@@ -385,13 +411,19 @@ export class AstAnalyzer {
       }
 
       const stmtSize = stmtEndLine - stmtStartLine;
-      Logger.debug(`Statement ${stmt.type} contains target line, size: ${stmtSize}`);
+      Logger.debug(
+        `Statement ${stmt.type} contains target line, size: ${stmtSize}`,
+      );
 
       // 处理 export 包装语句,深入到内部声明
       const unwrapped = this.unwrapExportDeclaration(stmt);
       if (unwrapped && unwrapped !== stmt) {
         Logger.debug(`Unwrapping export declaration to ${unwrapped.type}`);
-        const nested = this.findContainingStatement([unwrapped], code, targetLine);
+        const nested = this.findContainingStatement(
+          [unwrapped],
+          code,
+          targetLine,
+        );
         if (nested) {
           const nestedSize =
             this.offsetToLine(code, nested.end) -
@@ -399,7 +431,9 @@ export class AstAnalyzer {
           if (nestedSize < bestMatchSize) {
             bestMatch = nested;
             bestMatchSize = nestedSize;
-            Logger.debug(`Found better match in unwrapped: ${nested.type}, size: ${nestedSize}`);
+            Logger.debug(
+              `Found better match in unwrapped: ${nested.type}, size: ${nestedSize}`,
+            );
           }
           continue;
         }
@@ -414,7 +448,9 @@ export class AstAnalyzer {
 
       // 递归检查嵌套的语句块
       const nestedStatements = this.getNestedStatements(stmt);
-      Logger.debug(`Extracting nested statements from ${stmt.type}: found ${nestedStatements.length}`);
+      Logger.debug(
+        `Extracting nested statements from ${stmt.type}: found ${nestedStatements.length}`,
+      );
 
       if (nestedStatements.length > 0) {
         const nested = this.findContainingStatement(
@@ -429,7 +465,9 @@ export class AstAnalyzer {
           if (nestedSize < bestMatchSize) {
             bestMatch = nested;
             bestMatchSize = nestedSize;
-            Logger.debug(`Found better match in nested: ${nested.type}, size: ${nestedSize}`);
+            Logger.debug(
+              `Found better match in nested: ${nested.type}, size: ${nestedSize}`,
+            );
           }
         }
       }
@@ -455,8 +493,13 @@ export class AstAnalyzer {
   /**
    * 类型守卫:检查是否为 Export 声明
    */
-  private static isExportDeclaration(stmt: Statement): stmt is ExportDeclaration {
-    return stmt.type === 'ExportNamedDeclaration' || stmt.type === 'ExportDefaultDeclaration';
+  private static isExportDeclaration(
+    stmt: Statement,
+  ): stmt is ExportDeclaration {
+    return (
+      stmt.type === 'ExportNamedDeclaration' ||
+      stmt.type === 'ExportDefaultDeclaration'
+    );
   }
 
   /**
@@ -482,7 +525,9 @@ export class AstAnalyzer {
   /**
    * 类型守卫:检查是否为 SwitchStatement
    */
-  private static isSwitchStatement(stmt: Statement): stmt is SwitchStatementNode {
+  private static isSwitchStatement(
+    stmt: Statement,
+  ): stmt is SwitchStatementNode {
     return stmt.type === 'SwitchStatement';
   }
 
@@ -673,7 +718,9 @@ export class AstAnalyzer {
       if (Array.isArray(properties)) {
         for (const prop of properties) {
           if (prop && typeof prop === 'object' && 'value' in prop) {
-            statements.push(...this.extractStatementsFromExpression(prop.value));
+            statements.push(
+              ...this.extractStatementsFromExpression(prop.value),
+            );
           }
         }
       }
@@ -698,7 +745,9 @@ export class AstAnalyzer {
   /**
    * 检测语言类型
    */
-  private static detectLanguage(languageId: string): 'js' | 'jsx' | 'ts' | 'tsx' {
+  private static detectLanguage(
+    languageId: string,
+  ): 'js' | 'jsx' | 'ts' | 'tsx' {
     switch (languageId) {
       case 'typescript':
         return 'ts';
