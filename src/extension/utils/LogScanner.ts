@@ -35,9 +35,13 @@ export class LogScanner {
           const isCommented = line.trim().startsWith(commentSyntax);
           const variable = this.extractVariableFromLog(match);
 
+          // 检测多行日志的结束位置
+          const endLine = this.findLogEndLine(lines, index, match);
+
           logs.push({
             id: `${document.uri.toString()}-${index}`,
             line: index,
+            endLine: endLine,
             content: match.trim(),
             variable: variable || 'unknown',
             type: this.detectLogType(match),
@@ -50,6 +54,39 @@ export class LogScanner {
     });
 
     return logs;
+  }
+
+  /**
+   * 查找日志语句的结束行号
+   * 处理跨行的日志语句（如带换行的参数）
+   */
+  private static findLogEndLine(lines: string[], startLine: number, matchedText: string): number {
+    const currentLine = lines[startLine];
+
+    // 简单检测：如果当前行的日志语句括号已配对，则为单行日志
+    const openParens = (currentLine.match(/\(/g) || []).length;
+    const closeParens = (currentLine.match(/\)/g) || []).length;
+
+    if (openParens === closeParens) {
+      return startLine;
+    }
+
+    // 多行日志：向下查找匹配的闭合括号
+    let parenBalance = openParens - closeParens;
+    let endLine = startLine;
+
+    for (let i = startLine + 1; i < lines.length && i < startLine + 20; i++) {
+      const line = lines[i];
+      parenBalance += (line.match(/\(/g) || []).length;
+      parenBalance -= (line.match(/\)/g) || []).length;
+
+      if (parenBalance <= 0) {
+        endLine = i;
+        break;
+      }
+    }
+
+    return endLine;
   }
 
   /**

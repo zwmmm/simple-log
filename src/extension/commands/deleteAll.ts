@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
-import { LanguageAdapterRegistry } from '../adapters/LanguageAdapterRegistry';
-import { getLogConfig } from '../utils/helpers';
+import { LogScanner } from '../utils/LogScanner';
 
 /**
  * 删除所有日志命令
@@ -13,39 +12,25 @@ export async function deleteAllLogsCommand(): Promise<void> {
   }
 
   const document = editor.document;
-  const languageId = document.languageId;
-  const adapter = LanguageAdapterRegistry.get(languageId);
-  const config = getLogConfig();
 
-  const logPattern = adapter.getLogPattern();
-  const text = document.getText();
-  const edits: vscode.TextEdit[] = [];
+  // 使用 LogScanner 扫描所有日志（确保正确识别多行日志）
+  const logs = LogScanner.scanDocument(document);
 
-  // 查找所有日志语句并标记删除（仅删除插件生成的）
-  let match;
-  logPattern.lastIndex = 0; // 重置正则索引
+  if (logs.length === 0) {
+    vscode.window.showInformationMessage('No logs to delete');
+    return;
+  }
 
-  while ((match = logPattern.exec(text)) !== null) {
-    // 检查是否为插件生成的日志
-    if (!adapter.isPluginGeneratedLog(match[0], config.prefix)) {
-      continue; // 跳过非插件生成的日志
+  // 按 endLine 降序排序，从后往前删除（避免行号变化）
+  logs.sort((a, b) => b.endLine - a.endLine);
+
+  await editor.edit(editBuilder => {
+    for (const log of logs) {
+      // 使用 endLine 删除完整的多行日志
+      const range = new vscode.Range(log.line, 0, log.endLine + 1, 0);
+      editBuilder.delete(range);
     }
+  });
 
-    const startPos = document.positionAt(match.index);
-    const line = document.lineAt(startPos.line);
-
-    // 删除整行（包括换行符）
-    const range = new vscode.Range(
-      new vscode.Position(line.lineNumber, 0),
-      new vscode.Position(line.lineNumber + 1, 0)
-    );
-    edits.push(vscode.TextEdit.delete(range));
-  }
-
-  // 应用删除（无提示）
-  if (edits.length > 0) {
-    const workspaceEdit = new vscode.WorkspaceEdit();
-    workspaceEdit.set(document.uri, edits);
-    await vscode.workspace.applyEdit(workspaceEdit);
-  }
+  vscode.window.showInformationMessage(`Deleted ${logs.length} log(s)`);
 }

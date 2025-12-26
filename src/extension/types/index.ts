@@ -112,6 +112,8 @@ export type LogType = 'log' | 'info' | 'debug' | 'warn' | 'error';
 export interface LogEntry {
   id: string;
   line: number;
+  /** 日志语句的结束行号(对于多行日志) */
+  endLine: number;
   content: string;
   variable: string;
   type: LogType;

@@ -170,11 +170,13 @@ async function handleDeleteNode(
       const editor = await vscode.window.showTextDocument(document, { preview: false, preserveFocus: true });
 
       // 按行号降序排序，从后往前删除（避免行号变化）
-      fileLogs.sort((a, b) => b.line - a.line);
+      // 使用 endLine 进行排序以确保多行日志正确删除
+      fileLogs.sort((a, b) => b.endLine - a.endLine);
 
       await editor.edit(editBuilder => {
         for (const log of fileLogs) {
-          const range = new vscode.Range(log.line, 0, log.line + 1, 0);
+          // 使用 endLine 删除完整的多行日志
+          const range = new vscode.Range(log.line, 0, log.endLine + 1, 0);
           editBuilder.delete(range);
         }
       });
@@ -218,7 +220,8 @@ async function handleDeleteLog(item: LogTreeItem, treeDataProvider: LogTreeDataP
     const editor = await vscode.window.showTextDocument(document, { preview: false, preserveFocus: true });
 
     await editor.edit(editBuilder => {
-      const range = new vscode.Range(log.line, 0, log.line + 1, 0);
+      // 使用 endLine 来删除完整的多行日志
+      const range = new vscode.Range(log.line, 0, log.endLine + 1, 0);
       editBuilder.delete(range);
     });
 
