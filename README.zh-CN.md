@@ -14,7 +14,7 @@
 
 ## 💡 致敬与创新
 
-[Turbo Console Log](https://marketplace.visualstudio.com/items?itemName=ChakrounAnas.turbo-console-log) 是一款优秀的 JavaScript/TypeScript 日志插件，它让数百万开发者受益。我们从中汲取灵感，并在此基础上带来以下创新：
+[Turbo Console Log](https://marketplace.visualstudio.com/items?itemName=ChakrounAnas.turbo-console-log) 是一款优秀的 JavaScript/TypeScript 日志插件，。我们从中汲取灵感，并在此基础上带来以下创新：
 
 ### 🌟 为什么选择 Simple-Log？
 
@@ -22,7 +22,8 @@
 |------|-----------|---------|
 | **🚀 极致性能** | 基于 Rust 的 oxc-parser，毫秒级响应 | 通常基于 JS/TS 解析器，较慢 |
 | **🌍 多语言支持** | 支持 **8+ 种语言**（JS/TS/React/Vue/Python/Java/Go/Rust） | 通常仅支持 JavaScript/TypeScript |
-| **🧠 智能 AST 分析** | 深度语法分析，精准插入位置 | 简单行匹配，易产生语法错误 |
+| **🧠 智能 AST 分析** | 基于语义的语句边界识别，完整语句后插入 | 简单行匹配，易产生语法错误 |
+| **📍 插入位置合理** | 识别多行语句、链式调用，避免破坏代码结构 | 机械式插入下一行，可能切断语句 |
 | **🎯 可视化管理** | 专属侧边栏面板，统一管理所有日志 | 仅命令行操作 |
 | **⚙️ 灵活配置** | Simple/Smart 双模式，适应不同场景 | 配置选项有限 |
 | **📦 零依赖** | 轻量级设计，快速安装 | 可能包含大量依赖 |
